@@ -5,31 +5,22 @@ const io = require('socket.io')(server, {
   cors: { 
     origin: "*",
     methods: ["GET", "POST"],
-    credentials: true,
-    allowedHeaders: ["*"]
+    credentials: true
   } 
 });
 
-// Enable CORS
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-  next();
-});
-
-// Store connected devices
+// Store devices
 const devices = new Map();
 
-// Mobile Optimized HTML
-const htmlContent = `
-<!DOCTYPE html>
+// Mobile Optimized HTML - Modern Dark UI
+const htmlContent = `<!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#0f172a">
     <title>Camera Controller</title>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="theme-color" content="#000000">
     <style>
         * {
             margin: 0;
@@ -37,276 +28,315 @@ const htmlContent = `
             box-sizing: border-box;
             -webkit-tap-highlight-color: transparent;
         }
-        
+
         body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 12px;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0f172a;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            padding: 16px;
             min-height: 100vh;
         }
-        
+
+        /* Main Container */
         .container {
-            max-width: 600px;
+            max-width: 500px;
             margin: 0 auto;
         }
-        
+
         /* Header */
         .header {
             text-align: center;
-            margin-bottom: 15px;
+            margin-bottom: 24px;
         }
-        
+
         .header h1 {
-            font-size: 1.8em;
-            margin-bottom: 5px;
+            font-size: 28px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 4px;
         }
-        
+
         .header p {
-            font-size: 0.8em;
-            opacity: 0.8;
+            font-size: 14px;
+            color: #94a3b8;
         }
-        
-        /* Status Card */
-        .status-card {
-            background: rgba(0,0,0,0.3);
-            border-radius: 15px;
-            padding: 12px;
-            margin-bottom: 15px;
+
+        /* Connection Status */
+        .status-container {
+            background: #1e293b;
+            border-radius: 20px;
+            padding: 16px;
+            margin-bottom: 20px;
             text-align: center;
+            border: 1px solid #334155;
         }
-        
+
         .status-badge {
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
             padding: 6px 16px;
-            border-radius: 50px;
-            font-weight: bold;
-            font-size: 0.85em;
+            border-radius: 30px;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
         }
-        
-        .online {
-            background: #22c55e;
-            animation: pulse 2s infinite;
-        }
-        
-        .offline {
-            background: #ef4444;
-        }
-        
-        .connecting {
-            background: #f59e0b;
-        }
-        
-        @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.7; }
-            100% { opacity: 1; }
-        }
-        
-        .connection-info {
-            margin-top: 6px;
-            font-size: 0.7em;
-            opacity: 0.8;
-        }
-        
-        /* Device Selector */
-        .device-selector {
-            background: rgba(0,0,0,0.3);
-            border-radius: 15px;
-            padding: 12px;
-            margin-bottom: 15px;
-        }
-        
-        .device-selector h3 {
-            font-size: 0.9em;
-            margin-bottom: 10px;
-        }
-        
-        .device-scroll {
-            overflow-x: auto;
-            white-space: nowrap;
-            padding-bottom: 5px;
-        }
-        
-        .device-chip {
-            display: inline-block;
-            background: rgba(255,255,255,0.15);
-            padding: 8px 16px;
-            border-radius: 50px;
-            margin-right: 8px;
-            cursor: pointer;
-            transition: all 0.3s;
-            border: 1.5px solid transparent;
-        }
-        
-        .device-chip.active {
-            background: #22c55e;
-            border-color: white;
-        }
-        
-        .device-chip .name {
-            font-size: 0.85em;
-            font-weight: 500;
-        }
-        
-        .device-chip .status-dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
-            margin-left: 6px;
+            animation: pulse 1.5s infinite;
         }
-        
-        .device-chip .status-dot.streaming {
-            background: #3b82f6;
-            animation: pulse 1s infinite;
+
+        .status-dot.online { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+        .status-dot.offline { background: #ef4444; animation: none; }
+        .status-dot.connecting { background: #f59e0b; }
+
+        .status-text {
+            font-size: 13px;
+            color: #94a3b8;
         }
-        
-        .device-chip .status-dot.online {
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Device Section */
+        .device-section {
+            background: #1e293b;
+            border-radius: 20px;
+            padding: 16px;
+            margin-bottom: 20px;
+            border: 1px solid #334155;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #94a3b8;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .device-list {
+            display: flex;
+            gap: 12px;
+            overflow-x: auto;
+            padding-bottom: 4px;
+        }
+
+        .device-list::-webkit-scrollbar {
+            height: 3px;
+        }
+
+        .device-list::-webkit-scrollbar-track {
+            background: #334155;
+            border-radius: 10px;
+        }
+
+        .device-list::-webkit-scrollbar-thumb {
             background: #22c55e;
+            border-radius: 10px;
         }
-        
-        /* Video Container */
+
+        .device-card {
+            background: #0f172a;
+            border-radius: 16px;
+            padding: 12px 18px;
+            min-width: 130px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1.5px solid #334155;
+        }
+
+        .device-card.active {
+            border-color: #22c55e;
+            background: rgba(34, 197, 94, 0.1);
+        }
+
+        .device-name {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .device-status {
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .streaming-badge {
+            color: #3b82f6;
+        }
+
+        .online-badge {
+            color: #22c55e;
+        }
+
+        .no-device {
+            text-align: center;
+            padding: 30px;
+            color: #64748b;
+        }
+
+        /* Video Section */
+        .video-section {
+            background: #1e293b;
+            border-radius: 20px;
+            padding: 16px;
+            margin-bottom: 20px;
+            border: 1px solid #334155;
+        }
+
         .video-container {
-            background: #000;
-            border-radius: 15px;
+            background: #000000;
+            border-radius: 16px;
             overflow: hidden;
-            margin-bottom: 15px;
             aspect-ratio: 16/9;
             display: flex;
             align-items: center;
             justify-content: center;
+            margin-bottom: 16px;
             position: relative;
         }
-        
+
         #streamImg {
             width: 100%;
             height: 100%;
             object-fit: contain;
         }
-        
+
         .video-placeholder {
             position: absolute;
-            color: #666;
-            font-size: 0.9em;
-        }
-        
-        /* Stats Row */
-        .stats-row {
-            display: flex;
-            justify-content: space-around;
-            gap: 10px;
-            margin-bottom: 15px;
-        }
-        
-        .stat-box {
-            flex: 1;
-            background: rgba(0,0,0,0.3);
-            padding: 10px;
-            border-radius: 12px;
+            color: #475569;
+            font-size: 14px;
             text-align: center;
         }
-        
-        .stat-value {
-            font-size: 1.5em;
-            font-weight: bold;
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
         }
-        
+
+        .stat-card {
+            background: #0f172a;
+            border-radius: 14px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #22c55e;
+        }
+
         .stat-label {
-            font-size: 0.7em;
-            opacity: 0.8;
+            font-size: 11px;
+            color: #64748b;
             margin-top: 4px;
         }
-        
+
         /* Quality Section */
         .quality-section {
-            background: rgba(0,0,0,0.3);
-            border-radius: 15px;
-            padding: 12px;
-            margin-bottom: 15px;
+            margin-bottom: 20px;
         }
-        
+
         .quality-title {
-            font-size: 0.85em;
+            font-size: 13px;
+            color: #94a3b8;
             margin-bottom: 10px;
         }
-        
+
         .quality-buttons {
             display: flex;
-            gap: 10px;
+            gap: 12px;
         }
-        
+
         .quality-btn {
             flex: 1;
-            background: #1e293b;
+            background: #0f172a;
+            border: 1px solid #334155;
             color: white;
-            padding: 10px;
-            border: none;
-            border-radius: 25px;
-            cursor: pointer;
-            font-size: 0.85em;
+            padding: 12px;
+            border-radius: 40px;
+            font-size: 14px;
             font-weight: 500;
+            cursor: pointer;
             transition: all 0.2s;
         }
-        
+
         .quality-btn.active {
             background: #22c55e;
+            border-color: #22c55e;
         }
-        
+
         /* Control Buttons */
         .control-buttons {
             display: flex;
             gap: 12px;
-            margin-bottom: 15px;
         }
-        
+
         .control-btn {
             flex: 1;
             padding: 14px;
             border: none;
-            border-radius: 12px;
+            border-radius: 40px;
+            font-size: 16px;
+            font-weight: 600;
             cursor: pointer;
-            font-size: 1em;
-            font-weight: bold;
             transition: all 0.2s;
         }
-        
+
         .control-btn:active {
             transform: scale(0.97);
         }
-        
+
         .btn-start {
             background: #22c55e;
             color: white;
         }
-        
+
         .btn-stop {
             background: #ef4444;
             color: white;
         }
-        
+
         .btn-flip {
             background: #3b82f6;
             color: white;
         }
-        
+
         /* Toast */
         .toast {
             position: fixed;
-            bottom: 20px;
+            bottom: 30px;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(0,0,0,0.9);
+            background: #1e293b;
+            border: 1px solid #334155;
             color: white;
             padding: 10px 20px;
-            border-radius: 50px;
+            border-radius: 40px;
+            font-size: 13px;
             z-index: 1000;
-            font-size: 0.85em;
             white-space: nowrap;
-            animation: fadeInUp 0.3s ease;
+            animation: slideUp 0.3s ease;
         }
-        
-        @keyframes fadeInUp {
+
+        @keyframes slideUp {
             from {
                 transform: translateX(-50%) translateY(20px);
                 opacity: 0;
@@ -316,66 +346,63 @@ const htmlContent = `
                 opacity: 1;
             }
         }
-        
-        /* No Device Message */
-        .no-device-msg {
-            text-align: center;
-            padding: 40px 20px;
-            opacity: 0.6;
-            font-size: 0.9em;
-        }
-        
-        /* Debug (hidden by default, show if needed) */
-        .debug {
+
+        /* Hidden */
+        .hidden {
             display: none;
         }
     </style>
 </head>
 <body>
     <div class="container">
+        <!-- Header -->
         <div class="header">
             <h1>📷 Camera Controller</h1>
             <p>Live Stream from Android</p>
         </div>
-        
-        <div class="status-card">
-            <div id="statusBadge" class="status-badge connecting">● CONNECTING...</div>
-            <div class="connection-info" id="connectionInfo">Connecting to server...</div>
+
+        <!-- Connection Status -->
+        <div class="status-container">
+            <div class="status-badge" id="statusBadge">
+                <div class="status-dot connecting"></div>
+                <span>CONNECTING...</span>
+            </div>
+            <div class="status-text" id="connectionText">Connecting to server...</div>
         </div>
-        
-        <!-- Device Selector (Horizontal Scroll) -->
-        <div class="device-selector" id="deviceSelector" style="display: none;">
-            <h3>📱 Select Device</h3>
-            <div class="device-scroll" id="deviceList"></div>
+
+        <!-- Device Section -->
+        <div class="device-section">
+            <div class="section-title">
+                <span>📱</span> Connected Devices
+                <span id="deviceCount" style="color:#22c55e;">(0)</span>
+            </div>
+            <div id="deviceList" class="device-list">
+                <div class="no-device">⚠️ No device connected<br>Start Android app to begin</div>
+            </div>
         </div>
-        
-        <div id="noDeviceMsg" class="no-device-msg">
-            ⚡ No device connected<br>
-            <span style="font-size: 0.8em;">Start Android app to begin</span>
-        </div>
-        
+
         <!-- Video Section (Hidden initially) -->
-        <div id="videoSection" style="display: none;">
+        <div id="videoSection" class="video-section hidden">
             <div class="video-container">
-                <img id="streamImg" src="" alt="Live Feed">
+                <img id="streamImg" src="">
                 <div class="video-placeholder" id="videoPlaceholder">📹 Waiting for stream...</div>
             </div>
-            
-            <div class="stats-row">
-                <div class="stat-box">
+
+            <div class="stats-grid">
+                <div class="stat-card">
                     <div class="stat-value" id="fps">0</div>
                     <div class="stat-label">FPS</div>
                 </div>
-                <div class="stat-box">
+                <div class="stat-card">
                     <div class="stat-value" id="resolution">-</div>
                     <div class="stat-label">Resolution</div>
                 </div>
-                <div class="stat-box">
-                    <div class="stat-value" id="quality">-</div>
+                <div class="stat-card">
+                    <div class="stat-value" id="qualityLabel">-</div>
                     <div class="stat-label">Quality</div>
                 </div>
             </div>
-            
+
             <div class="quality-section">
                 <div class="quality-title">🎨 Stream Quality</div>
                 <div class="quality-buttons">
@@ -384,7 +411,7 @@ const htmlContent = `
                     <button class="quality-btn" data-quality="360p">360p</button>
                 </div>
             </div>
-            
+
             <div class="control-buttons">
                 <button class="control-btn btn-start" id="startBtn">▶ START</button>
                 <button class="control-btn btn-stop" id="stopBtn">⏹ STOP</button>
@@ -392,30 +419,27 @@ const htmlContent = `
             </div>
         </div>
     </div>
-    
+
     <script>
-        const REPLIT_URL = window.location.origin;
+        const socket = io();
         
-        let socket;
         let currentDevice = null;
         let frameCount = 0;
         let lastTime = Date.now();
         let connectedDevices = new Map();
-        let isStreaming = false;
-        
+
         // DOM Elements
         const statusBadge = document.getElementById('statusBadge');
-        const connectionInfo = document.getElementById('connectionInfo');
-        const deviceSelector = document.getElementById('deviceSelector');
+        const connectionText = document.getElementById('connectionText');
         const deviceListDiv = document.getElementById('deviceList');
-        const noDeviceMsg = document.getElementById('noDeviceMsg');
+        const deviceCountSpan = document.getElementById('deviceCount');
         const videoSection = document.getElementById('videoSection');
         const streamImg = document.getElementById('streamImg');
         const videoPlaceholder = document.getElementById('videoPlaceholder');
         const fpsSpan = document.getElementById('fps');
         const resolutionSpan = document.getElementById('resolution');
-        const qualitySpan = document.getElementById('quality');
-        
+        const qualityLabelSpan = document.getElementById('qualityLabel');
+
         // FPS Counter
         function updateFPS() {
             const now = Date.now();
@@ -427,7 +451,7 @@ const htmlContent = `
             requestAnimationFrame(updateFPS);
         }
         updateFPS();
-        
+
         function showToast(msg) {
             const toast = document.createElement('div');
             toast.className = 'toast';
@@ -435,177 +459,151 @@ const htmlContent = `
             document.body.appendChild(toast);
             setTimeout(() => toast.remove(), 2000);
         }
-        
-        function updateDeviceList() {
+
+        function updateDeviceUI() {
             if (connectedDevices.size === 0) {
-                deviceSelector.style.display = 'none';
-                noDeviceMsg.style.display = 'block';
-                videoSection.style.display = 'none';
+                deviceListDiv.innerHTML = '<div class="no-device">⚠️ No device connected<br>Start Android app to begin</div>';
+                deviceCountSpan.textContent = '(0)';
+                videoSection.classList.add('hidden');
                 currentDevice = null;
                 return;
             }
-            
-            deviceSelector.style.display = 'block';
-            noDeviceMsg.style.display = 'none';
+
+            deviceCountSpan.textContent = `(${connectedDevices.size})`;
             
             let html = '';
             connectedDevices.forEach((device, id) => {
                 const isActive = currentDevice === id;
-                const statusDotClass = device.streaming ? 'streaming' : 'online';
-                html += \`
-                    <div class="device-chip \${isActive ? 'active' : ''}" onclick="selectDevice('\${id}')">
-                        <span class="name">\${device.name}</span>
-                        <span class="status-dot \${statusDotClass}"></span>
+                const statusClass = device.streaming ? 'streaming-badge' : 'online-badge';
+                const statusText = device.streaming ? '🔵 Streaming' : '🟢 Online';
+                
+                html += `
+                    <div class="device-card ${isActive ? 'active' : ''}" onclick="selectDevice('${id}')">
+                        <div class="device-name">${device.name.length > 15 ? device.name.substring(0,12)+'...' : device.name}</div>
+                        <div class="device-status">
+                            <span class="${statusClass}">${statusText}</span>
+                        </div>
                     </div>
-                \`;
+                `;
             });
             deviceListDiv.innerHTML = html;
-            
-            if (currentDevice && !connectedDevices.has(currentDevice)) {
-                currentDevice = null;
-                videoSection.style.display = 'none';
-            } else if (currentDevice && !videoSection.style.display === 'none') {
-                videoSection.style.display = 'block';
-            }
         }
-        
+
         function selectDevice(deviceId) {
             currentDevice = deviceId;
             const device = connectedDevices.get(deviceId);
-            updateDeviceList();
-            videoSection.style.display = 'block';
-            videoPlaceholder.style.display = 'block';
+            updateDeviceUI();
+            videoSection.classList.remove('hidden');
             streamImg.src = '';
+            videoPlaceholder.style.display = 'flex';
+            videoPlaceholder.textContent = '📹 Waiting for stream...';
             resolutionSpan.textContent = '-';
-            qualitySpan.textContent = '-';
-            showToast(\`Connected to \${device.name}\`);
+            qualityLabelSpan.textContent = '-';
+            showToast(`📱 Connected to ${device.name}`);
         }
-        
-        // Socket Connection
-        function initSocket() {
-            socket = io(REPLIT_URL, {
-                transports: ['websocket', 'polling'],
-                reconnection: true,
-                reconnectionAttempts: 20,
-                reconnectionDelay: 1000,
-                timeout: 10000
-            });
-            
-            socket.on('connect', () => {
-                statusBadge.className = 'status-badge online';
-                statusBadge.innerHTML = '● ONLINE';
-                connectionInfo.innerHTML = 'Connected to server';
-                showToast('Connected!');
-            });
-            
-            socket.on('disconnect', () => {
-                statusBadge.className = 'status-badge offline';
-                statusBadge.innerHTML = '● OFFLINE';
-                connectionInfo.innerHTML = 'Disconnected';
-                videoSection.style.display = 'none';
-            });
-            
-            socket.on('connect_error', () => {
-                statusBadge.className = 'status-badge connecting';
-                statusBadge.innerHTML = '● CONNECTING...';
-            });
-            
-            socket.on('device_list_update', (devices) => {
-                if (Array.isArray(devices)) {
-                    connectedDevices.clear();
-                    devices.forEach(d => connectedDevices.set(d.id, d));
-                    updateDeviceList();
-                }
-            });
-            
-            socket.on('device_connected', (devices) => {
-                if (Array.isArray(devices)) {
-                    connectedDevices.clear();
-                    devices.forEach(d => connectedDevices.set(d.id, d));
-                } else if (devices && devices.id) {
-                    connectedDevices.set(devices.id, devices);
-                }
-                updateDeviceList();
-            });
-            
-            socket.on('device_disconnected', (deviceId) => {
-                connectedDevices.delete(deviceId);
-                if (currentDevice === deviceId) {
-                    currentDevice = null;
-                    videoSection.style.display = 'none';
-                }
-                updateDeviceList();
-                showToast('Device disconnected');
-            });
-            
-            socket.on('device_streaming', ({ deviceId, streaming }) => {
-                if (connectedDevices.has(deviceId)) {
-                    const device = connectedDevices.get(deviceId);
-                    device.streaming = streaming;
-                    connectedDevices.set(deviceId, device);
-                    updateDeviceList();
-                    if (currentDevice === deviceId && streaming) {
-                        videoPlaceholder.style.display = 'none';
-                    } else if (currentDevice === deviceId && !streaming) {
-                        videoPlaceholder.style.display = 'block';
-                        videoPlaceholder.innerHTML = '⏸ Stream stopped';
-                    }
-                }
-            });
-            
-            socket.on('frame', (data) => {
-                if (currentDevice) {
-                    streamImg.src = data;
-                    frameCount++;
+
+        // Socket Events
+        socket.on('connect', () => {
+            statusBadge.innerHTML = '<div class="status-dot online"></div><span>ONLINE</span>';
+            connectionText.textContent = 'Connected to server';
+            showToast('✅ Connected to server');
+        });
+
+        socket.on('disconnect', () => {
+            statusBadge.innerHTML = '<div class="status-dot offline"></div><span>OFFLINE</span>';
+            connectionText.textContent = 'Disconnected from server';
+            videoSection.classList.add('hidden');
+        });
+
+        socket.on('connect_error', () => {
+            statusBadge.innerHTML = '<div class="status-dot connecting"></div><span>CONNECTING...</span>';
+            connectionText.textContent = 'Connecting to server...';
+        });
+
+        socket.on('device_list_update', (devices) => {
+            if (Array.isArray(devices)) {
+                connectedDevices.clear();
+                devices.forEach(d => connectedDevices.set(d.id, d));
+                updateDeviceUI();
+            }
+        });
+
+        socket.on('device_connected', (devices) => {
+            if (Array.isArray(devices)) {
+                connectedDevices.clear();
+                devices.forEach(d => connectedDevices.set(d.id, d));
+            } else if (devices && devices.id) {
+                connectedDevices.set(devices.id, devices);
+            }
+            updateDeviceUI();
+            showToast('📱 New device connected!');
+        });
+
+        socket.on('device_disconnected', (deviceId) => {
+            connectedDevices.delete(deviceId);
+            if (currentDevice === deviceId) {
+                currentDevice = null;
+                videoSection.classList.add('hidden');
+            }
+            updateDeviceUI();
+            showToast('❌ Device disconnected');
+        });
+
+        socket.on('device_streaming', ({ deviceId, streaming }) => {
+            if (connectedDevices.has(deviceId)) {
+                const device = connectedDevices.get(deviceId);
+                device.streaming = streaming;
+                connectedDevices.set(deviceId, device);
+                updateDeviceUI();
+                if (currentDevice === deviceId && streaming) {
                     videoPlaceholder.style.display = 'none';
+                } else if (currentDevice === deviceId && !streaming) {
+                    videoPlaceholder.style.display = 'flex';
+                    videoPlaceholder.textContent = '⏸ Stream stopped';
                 }
-            });
-            
-            socket.on('resolution_update', ({ deviceId, width, height, quality }) => {
-                if (currentDevice === deviceId) {
-                    resolutionSpan.textContent = \`\${width}x\${height}\`;
-                    qualitySpan.textContent = quality;
-                }
-            });
-        }
-        
-        // Control Handlers (No stream stop)
+            }
+        });
+
+        socket.on('frame', (data) => {
+            if (currentDevice) {
+                streamImg.src = data;
+                frameCount++;
+                videoPlaceholder.style.display = 'none';
+            }
+        });
+
+        socket.on('resolution_update', ({ deviceId, width, height, quality }) => {
+            if (currentDevice === deviceId) {
+                resolutionSpan.textContent = `${width}x${height}`;
+                qualityLabelSpan.textContent = quality;
+            }
+        });
+
+        // Controls
         document.getElementById('startBtn')?.addEventListener('click', () => {
-            if (!currentDevice) {
-                showToast('Select a device first!');
-                return;
-            }
+            if (!currentDevice) { showToast('Select a device first!'); return; }
             socket.emit('command', 'start');
-            showToast('Starting stream...');
-            videoPlaceholder.innerHTML = '📹 Starting...';
+            showToast('▶ Starting stream...');
+            videoPlaceholder.textContent = '📹 Starting...';
         });
-        
+
         document.getElementById('stopBtn')?.addEventListener('click', () => {
-            if (!currentDevice) {
-                showToast('Select a device first!');
-                return;
-            }
+            if (!currentDevice) { showToast('Select a device first!'); return; }
             socket.emit('command', 'stop');
-            showToast('Stopping stream');
-            videoPlaceholder.style.display = 'block';
-            videoPlaceholder.innerHTML = '⏸ Stream stopped';
+            showToast('⏹ Stopping stream');
+            videoPlaceholder.style.display = 'flex';
+            videoPlaceholder.textContent = '⏸ Stream stopped';
         });
-        
+
         document.getElementById('flipBtn')?.addEventListener('click', () => {
-            if (!currentDevice) {
-                showToast('Select a device first!');
-                return;
-            }
+            if (!currentDevice) { showToast('Select a device first!'); return; }
             socket.emit('command', 'flip');
             showToast('🔄 Flipping camera...');
         });
-        
+
         document.querySelectorAll('.quality-btn').forEach(btn => {
             btn.addEventListener('click', () => {
-                if (!currentDevice) {
-                    showToast('Select a device first!');
-                    return;
-                }
+                if (!currentDevice) { showToast('Select a device first!'); return; }
                 document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 const quality = btn.dataset.quality;
@@ -614,22 +612,18 @@ const htmlContent = `
                 else if (quality === '240p') { width = 320; height = 240; }
                 else { width = 480; height = 360; }
                 socket.emit('quality', { quality, width, height });
-                showToast(\`Quality: \${quality}\`);
+                showToast(`🎨 Quality: ${quality}`);
             });
         });
-        
-        initSocket();
     </script>
 </body>
-</html>
-`;
+</html>`;
 
-// Serve HTML
 app.get('/', (req, res) => {
   res.send(htmlContent);
 });
 
-// Socket.io events
+// Socket Events
 io.on('connection', (socket) => {
   console.log('✅ Client connected:', socket.id);
   
@@ -640,35 +634,27 @@ io.on('connection', (socket) => {
       model: deviceInfo.model,
       streaming: false
     });
-    console.log('📱 Device registered:', deviceInfo.name);
-    io.emit('device_connected', Array.from(devices.values()));
+    console.log('📱 Device:', deviceInfo.name);
     io.emit('device_list_update', Array.from(devices.values()));
   });
   
-  // Forward frame to all web clients
   socket.on('frame', (data) => {
     socket.broadcast.emit('frame', data);
   });
   
-  // Forward command to Android
   socket.on('command', (cmd) => {
     console.log('🎮 Command:', cmd);
-    for (let [id, device] of devices) {
-      const targetSocket = io.sockets.sockets.get(id);
-      if (targetSocket) {
-        targetSocket.emit('command', cmd);
-      }
+    for (let [id] of devices) {
+      const target = io.sockets.sockets.get(id);
+      if (target) target.emit('command', cmd);
     }
   });
   
-  // Forward quality to Android
-  socket.on('quality', (qualityData) => {
-    console.log('🎨 Quality:', qualityData);
-    for (let [id, device] of devices) {
-      const targetSocket = io.sockets.sockets.get(id);
-      if (targetSocket) {
-        targetSocket.emit('quality', qualityData);
-      }
+  socket.on('quality', (data) => {
+    console.log('🎨 Quality:', data);
+    for (let [id] of devices) {
+      const target = io.sockets.sockets.get(id);
+      if (target) target.emit('quality', data);
     }
   });
   
@@ -685,16 +671,10 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('resolution_update', { deviceId: socket.id, ...data });
   });
   
-  socket.on('heartbeat', (data) => {
-    console.log('💓 Heartbeat from:', socket.id);
-  });
-  
   socket.on('disconnect', () => {
     if (devices.has(socket.id)) {
-      const device = devices.get(socket.id);
-      console.log('❌ Device disconnected:', device.name);
+      console.log('❌ Device disconnected:', devices.get(socket.id).name);
       devices.delete(socket.id);
-      io.emit('device_disconnected', socket.id);
       io.emit('device_list_update', Array.from(devices.values()));
     }
   });
@@ -702,7 +682,6 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(\`🚀 Server running on port \${PORT}\`);
+  console.log(`🚀 Server on port ${PORT}`);
   console.log('📱 Mobile optimized UI ready');
-  console.log('✨ Live flip & quality change (no stream stop)');
 });
