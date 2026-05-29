@@ -12,12 +12,11 @@ const io = require('socket.io')(server, {
 // Store devices
 const devices = new Map();
 
-// Mobile Optimized HTML - Modern Dark UI
 const htmlContent = `<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="theme-color" content="#0f172a">
     <title>Camera Controller</title>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
@@ -33,11 +32,10 @@ const htmlContent = `<!DOCTYPE html>
             background: #0f172a;
             color: #ffffff;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            padding: 16px;
+            padding: 20px 16px;
             min-height: 100vh;
         }
 
-        /* Main Container */
         .container {
             max-width: 500px;
             margin: 0 auto;
@@ -50,9 +48,9 @@ const htmlContent = `<!DOCTYPE html>
         }
 
         .header h1 {
-            font-size: 28px;
+            font-size: 26px;
             font-weight: 700;
-            background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
+            background: linear-gradient(135deg, #22c55e, #3b82f6);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
@@ -60,54 +58,62 @@ const htmlContent = `<!DOCTYPE html>
         }
 
         .header p {
-            font-size: 14px;
-            color: #94a3b8;
+            font-size: 13px;
+            color: #64748b;
         }
 
-        /* Connection Status */
-        .status-container {
+        /* Device Status Card */
+        .device-status-card {
             background: #1e293b;
             border-radius: 20px;
             padding: 16px;
             margin-bottom: 20px;
-            text-align: center;
             border: 1px solid #334155;
+            text-align: center;
         }
 
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 6px 16px;
-            border-radius: 30px;
-            font-size: 14px;
+        .device-name-large {
+            font-size: 18px;
             font-weight: 600;
             margin-bottom: 8px;
         }
 
-        .status-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            animation: pulse 1.5s infinite;
-        }
-
-        .status-dot.online { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
-        .status-dot.offline { background: #ef4444; animation: none; }
-        .status-dot.connecting { background: #f59e0b; }
-
-        .status-text {
+        .status-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            border-radius: 30px;
             font-size: 13px;
-            color: #94a3b8;
+            font-weight: 500;
         }
+
+        .status-offline {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+
+        .status-online {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .dot-offline { background: #ef4444; }
+        .dot-online { background: #22c55e; animation: pulse 1.5s infinite; }
 
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
         }
 
-        /* Device Section */
-        .device-section {
+        /* Device Selector */
+        .device-selector {
             background: #1e293b;
             border-radius: 20px;
             padding: 16px;
@@ -116,8 +122,7 @@ const htmlContent = `<!DOCTYPE html>
         }
 
         .section-title {
-            font-size: 14px;
-            font-weight: 600;
+            font-size: 13px;
             color: #94a3b8;
             margin-bottom: 12px;
             display: flex;
@@ -125,71 +130,46 @@ const htmlContent = `<!DOCTYPE html>
             gap: 8px;
         }
 
-        .device-list {
+        .device-scroll {
             display: flex;
-            gap: 12px;
+            gap: 10px;
             overflow-x: auto;
             padding-bottom: 4px;
         }
 
-        .device-list::-webkit-scrollbar {
+        .device-scroll::-webkit-scrollbar {
             height: 3px;
         }
 
-        .device-list::-webkit-scrollbar-track {
+        .device-scroll::-webkit-scrollbar-track {
             background: #334155;
             border-radius: 10px;
         }
 
-        .device-list::-webkit-scrollbar-thumb {
+        .device-scroll::-webkit-scrollbar-thumb {
             background: #22c55e;
             border-radius: 10px;
         }
 
-        .device-card {
+        .device-chip {
             background: #0f172a;
-            border-radius: 16px;
-            padding: 12px 18px;
-            min-width: 130px;
+            border: 1.5px solid #334155;
+            border-radius: 40px;
+            padding: 8px 18px;
+            white-space: nowrap;
             cursor: pointer;
             transition: all 0.2s;
-            border: 1.5px solid #334155;
+            font-size: 14px;
+            font-weight: 500;
         }
 
-        .device-card.active {
+        .device-chip.active {
             border-color: #22c55e;
             background: rgba(34, 197, 94, 0.1);
         }
 
-        .device-name {
-            font-size: 15px;
-            font-weight: 600;
-            margin-bottom: 6px;
-        }
-
-        .device-status {
-            font-size: 12px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .streaming-badge {
-            color: #3b82f6;
-        }
-
-        .online-badge {
-            color: #22c55e;
-        }
-
-        .no-device {
-            text-align: center;
-            padding: 30px;
-            color: #64748b;
-        }
-
-        /* Video Section */
-        .video-section {
+        /* Live Feed Section */
+        .live-feed {
             background: #1e293b;
             border-radius: 20px;
             padding: 16px;
@@ -197,6 +177,31 @@ const htmlContent = `<!DOCTYPE html>
             border: 1px solid #334155;
         }
 
+        .feed-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .feed-title {
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .fps-badge {
+            background: #0f172a;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #22c55e;
+        }
+
+        /* Video Container */
         .video-container {
             background: #000000;
             border-radius: 16px;
@@ -205,8 +210,8 @@ const htmlContent = `<!DOCTYPE html>
             display: flex;
             align-items: center;
             justify-content: center;
-            margin-bottom: 16px;
             position: relative;
+            margin-bottom: 12px;
         }
 
         #streamImg {
@@ -217,52 +222,58 @@ const htmlContent = `<!DOCTYPE html>
 
         .video-placeholder {
             position: absolute;
+            text-align: center;
             color: #475569;
-            font-size: 14px;
-            text-align: center;
         }
 
-        /* Stats Grid */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 12px;
-            margin-bottom: 20px;
+        .placeholder-icon {
+            font-size: 48px;
+            margin-bottom: 8px;
         }
 
-        .stat-card {
+        .placeholder-text {
+            font-size: 13px;
+        }
+
+        /* Stream Info */
+        .stream-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 12px;
             background: #0f172a;
-            border-radius: 14px;
-            padding: 12px;
+            border-radius: 12px;
+        }
+
+        .info-item {
             text-align: center;
         }
 
-        .stat-value {
-            font-size: 24px;
-            font-weight: 700;
-            color: #22c55e;
+        .info-label {
+            font-size: 10px;
+            color: #64748b;
+            margin-bottom: 2px;
         }
 
-        .stat-label {
-            font-size: 11px;
-            color: #64748b;
-            margin-top: 4px;
+        .info-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: #22c55e;
         }
 
         /* Quality Section */
         .quality-section {
+            background: #1e293b;
+            border-radius: 20px;
+            padding: 16px;
             margin-bottom: 20px;
-        }
-
-        .quality-title {
-            font-size: 13px;
-            color: #94a3b8;
-            margin-bottom: 10px;
+            border: 1px solid #334155;
         }
 
         .quality-buttons {
             display: flex;
             gap: 12px;
+            margin-top: 10px;
         }
 
         .quality-btn {
@@ -276,6 +287,7 @@ const htmlContent = `<!DOCTYPE html>
             font-weight: 500;
             cursor: pointer;
             transition: all 0.2s;
+            text-align: center;
         }
 
         .quality-btn.active {
@@ -287,6 +299,7 @@ const htmlContent = `<!DOCTYPE html>
         .control-buttons {
             display: flex;
             gap: 12px;
+            margin-bottom: 20px;
         }
 
         .control-btn {
@@ -319,6 +332,13 @@ const htmlContent = `<!DOCTYPE html>
             color: white;
         }
 
+        /* No Device Message */
+        .no-device-msg {
+            text-align: center;
+            padding: 40px 20px;
+            color: #64748b;
+        }
+
         /* Toast */
         .toast {
             position: fixed;
@@ -347,7 +367,6 @@ const htmlContent = `<!DOCTYPE html>
             }
         }
 
-        /* Hidden */
         .hidden {
             display: none;
         }
@@ -358,65 +377,77 @@ const htmlContent = `<!DOCTYPE html>
         <!-- Header -->
         <div class="header">
             <h1>📷 Camera Controller</h1>
-            <p>Live Stream from Android</p>
+            <p>Firebase Controlled Camera</p>
         </div>
 
-        <!-- Connection Status -->
-        <div class="status-container">
-            <div class="status-badge" id="statusBadge">
-                <div class="status-dot connecting"></div>
-                <span>CONNECTING...</span>
+        <!-- Device Status -->
+        <div class="device-status-card">
+            <div class="device-name-large" id="deviceName">No Device</div>
+            <div class="status-indicator" id="deviceStatus">
+                <div class="dot dot-offline"></div>
+                <span>Device Offline</span>
             </div>
-            <div class="status-text" id="connectionText">Connecting to server...</div>
         </div>
 
-        <!-- Device Section -->
-        <div class="device-section">
+        <!-- Device Selector -->
+        <div class="device-selector" id="deviceSelector">
             <div class="section-title">
                 <span>📱</span> Connected Devices
                 <span id="deviceCount" style="color:#22c55e;">(0)</span>
             </div>
-            <div id="deviceList" class="device-list">
-                <div class="no-device">⚠️ No device connected<br>Start Android app to begin</div>
+            <div class="device-scroll" id="deviceList">
+                <div class="no-device-msg">No device connected</div>
             </div>
         </div>
 
-        <!-- Video Section (Hidden initially) -->
-        <div id="videoSection" class="video-section hidden">
+        <!-- Live Feed Section -->
+        <div class="live-feed" id="liveFeed">
+            <div class="feed-header">
+                <div class="feed-title">
+                    <span>📺</span> Live Feed
+                </div>
+                <div class="fps-badge" id="fpsDisplay">0 FPS</div>
+            </div>
+            
             <div class="video-container">
-                <img id="streamImg" src="">
-                <div class="video-placeholder" id="videoPlaceholder">📹 Waiting for stream...</div>
+                <img id="streamImg" src="" alt="Live Feed">
+                <div class="video-placeholder" id="videoPlaceholder">
+                    <div class="placeholder-icon">📷</div>
+                    <div class="placeholder-text">No active stream</div>
+                </div>
             </div>
+            
+            <div class="stream-info">
+                <div class="info-item">
+                    <div class="info-label">Resolution</div>
+                    <div class="info-value" id="resolution">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Bitrate</div>
+                    <div class="info-value" id="bitrate">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Quality</div>
+                    <div class="info-value" id="qualityText">240p</div>
+                </div>
+            </div>
+        </div>
 
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-value" id="fps">0</div>
-                    <div class="stat-label">FPS</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="resolution">-</div>
-                    <div class="stat-label">Resolution</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="qualityLabel">-</div>
-                    <div class="stat-label">Quality</div>
-                </div>
+        <!-- Stream Quality -->
+        <div class="quality-section">
+            <div class="section-title">🎨 Stream Quality</div>
+            <div class="quality-buttons">
+                <button class="quality-btn" data-quality="140p">140p</button>
+                <button class="quality-btn active" data-quality="240p">240p</button>
+                <button class="quality-btn" data-quality="360p">360p</button>
             </div>
+        </div>
 
-            <div class="quality-section">
-                <div class="quality-title">🎨 Stream Quality</div>
-                <div class="quality-buttons">
-                    <button class="quality-btn" data-quality="140p">140p</button>
-                    <button class="quality-btn active" data-quality="240p">240p</button>
-                    <button class="quality-btn" data-quality="360p">360p</button>
-                </div>
-            </div>
-
-            <div class="control-buttons">
-                <button class="control-btn btn-start" id="startBtn">▶ START</button>
-                <button class="control-btn btn-stop" id="stopBtn">⏹ STOP</button>
-                <button class="control-btn btn-flip" id="flipBtn">🔄 FLIP</button>
-            </div>
+        <!-- Camera Control -->
+        <div class="control-buttons">
+            <button class="control-btn btn-start" id="startBtn">▶ START</button>
+            <button class="control-btn btn-stop" id="stopBtn">⏹ STOP</button>
+            <button class="control-btn btn-flip" id="flipBtn">🔄 FLIP</button>
         </div>
     </div>
 
@@ -427,30 +458,28 @@ const htmlContent = `<!DOCTYPE html>
         let frameCount = 0;
         let lastTime = Date.now();
         let connectedDevices = new Map();
+        let frameInterval = null;
 
         // DOM Elements
-        const statusBadge = document.getElementById('statusBadge');
-        const connectionText = document.getElementById('connectionText');
+        const deviceNameSpan = document.getElementById('deviceName');
+        const deviceStatusDiv = document.getElementById('deviceStatus');
         const deviceListDiv = document.getElementById('deviceList');
         const deviceCountSpan = document.getElementById('deviceCount');
-        const videoSection = document.getElementById('videoSection');
         const streamImg = document.getElementById('streamImg');
         const videoPlaceholder = document.getElementById('videoPlaceholder');
-        const fpsSpan = document.getElementById('fps');
+        const fpsDisplay = document.getElementById('fpsDisplay');
         const resolutionSpan = document.getElementById('resolution');
-        const qualityLabelSpan = document.getElementById('qualityLabel');
+        const qualityTextSpan = document.getElementById('qualityText');
 
         // FPS Counter
-        function updateFPS() {
-            const now = Date.now();
-            if (now - lastTime >= 1000) {
-                fpsSpan.textContent = frameCount;
+        function startFPSMonitor() {
+            if (frameInterval) clearInterval(frameInterval);
+            frameInterval = setInterval(() => {
+                fpsDisplay.textContent = frameCount + ' FPS';
                 frameCount = 0;
-                lastTime = now;
-            }
-            requestAnimationFrame(updateFPS);
+            }, 1000);
         }
-        updateFPS();
+        startFPSMonitor();
 
         function showToast(msg) {
             const toast = document.createElement('div');
@@ -462,10 +491,13 @@ const htmlContent = `<!DOCTYPE html>
 
         function updateDeviceUI() {
             if (connectedDevices.size === 0) {
-                deviceListDiv.innerHTML = '<div class="no-device">⚠️ No device connected<br>Start Android app to begin</div>';
+                deviceListDiv.innerHTML = '<div class="no-device-msg">⚠️ No device connected</div>';
                 deviceCountSpan.textContent = '(0)';
-                videoSection.classList.add('hidden');
-                currentDevice = null;
+                if (!currentDevice) {
+                    deviceNameSpan.textContent = 'No Device';
+                    deviceStatusDiv.innerHTML = '<div class="dot dot-offline"></div><span>Device Offline</span>';
+                    deviceStatusDiv.className = 'status-indicator status-offline';
+                }
                 return;
             }
 
@@ -474,17 +506,7 @@ const htmlContent = `<!DOCTYPE html>
             let html = '';
             connectedDevices.forEach((device, id) => {
                 const isActive = currentDevice === id;
-                const statusClass = device.streaming ? 'streaming-badge' : 'online-badge';
-                const statusText = device.streaming ? '🔵 Streaming' : '🟢 Online';
-                
-                html += `
-                    <div class="device-card ${isActive ? 'active' : ''}" onclick="selectDevice('${id}')">
-                        <div class="device-name">${device.name.length > 15 ? device.name.substring(0,12)+'...' : device.name}</div>
-                        <div class="device-status">
-                            <span class="${statusClass}">${statusText}</span>
-                        </div>
-                    </div>
-                `;
+                html += `<div class="device-chip ${isActive ? 'active' : ''}" onclick="selectDevice('${id}')">${device.name}</div>`;
             });
             deviceListDiv.innerHTML = html;
         }
@@ -492,32 +514,32 @@ const htmlContent = `<!DOCTYPE html>
         function selectDevice(deviceId) {
             currentDevice = deviceId;
             const device = connectedDevices.get(deviceId);
+            
+            deviceNameSpan.textContent = device.name;
+            deviceStatusDiv.innerHTML = '<div class="dot dot-online"></div><span>Device Online</span>';
+            deviceStatusDiv.className = 'status-indicator status-online';
+            
             updateDeviceUI();
-            videoSection.classList.remove('hidden');
+            
+            // Reset video
             streamImg.src = '';
             videoPlaceholder.style.display = 'flex';
-            videoPlaceholder.textContent = '📹 Waiting for stream...';
             resolutionSpan.textContent = '-';
-            qualityLabelSpan.textContent = '-';
+            
             showToast(`📱 Connected to ${device.name}`);
         }
 
         // Socket Events
         socket.on('connect', () => {
-            statusBadge.innerHTML = '<div class="status-dot online"></div><span>ONLINE</span>';
-            connectionText.textContent = 'Connected to server';
             showToast('✅ Connected to server');
         });
 
         socket.on('disconnect', () => {
-            statusBadge.innerHTML = '<div class="status-dot offline"></div><span>OFFLINE</span>';
-            connectionText.textContent = 'Disconnected from server';
-            videoSection.classList.add('hidden');
-        });
-
-        socket.on('connect_error', () => {
-            statusBadge.innerHTML = '<div class="status-dot connecting"></div><span>CONNECTING...</span>';
-            connectionText.textContent = 'Connecting to server...';
+            deviceNameSpan.textContent = 'No Device';
+            deviceStatusDiv.innerHTML = '<div class="dot dot-offline"></div><span>Device Offline</span>';
+            deviceStatusDiv.className = 'status-indicator status-offline';
+            videoPlaceholder.style.display = 'flex';
+            showToast('❌ Disconnected');
         });
 
         socket.on('device_list_update', (devices) => {
@@ -543,25 +565,15 @@ const htmlContent = `<!DOCTYPE html>
             connectedDevices.delete(deviceId);
             if (currentDevice === deviceId) {
                 currentDevice = null;
-                videoSection.classList.add('hidden');
+                deviceNameSpan.textContent = 'No Device';
+                deviceStatusDiv.innerHTML = '<div class="dot dot-offline"></div><span>Device Offline</span>';
+                deviceStatusDiv.className = 'status-indicator status-offline';
+                videoPlaceholder.style.display = 'flex';
+                streamImg.src = '';
+                resolutionSpan.textContent = '-';
             }
             updateDeviceUI();
             showToast('❌ Device disconnected');
-        });
-
-        socket.on('device_streaming', ({ deviceId, streaming }) => {
-            if (connectedDevices.has(deviceId)) {
-                const device = connectedDevices.get(deviceId);
-                device.streaming = streaming;
-                connectedDevices.set(deviceId, device);
-                updateDeviceUI();
-                if (currentDevice === deviceId && streaming) {
-                    videoPlaceholder.style.display = 'none';
-                } else if (currentDevice === deviceId && !streaming) {
-                    videoPlaceholder.style.display = 'flex';
-                    videoPlaceholder.textContent = '⏸ Stream stopped';
-                }
-            }
         });
 
         socket.on('frame', (data) => {
@@ -575,27 +587,29 @@ const htmlContent = `<!DOCTYPE html>
         socket.on('resolution_update', ({ deviceId, width, height, quality }) => {
             if (currentDevice === deviceId) {
                 resolutionSpan.textContent = `${width}x${height}`;
-                qualityLabelSpan.textContent = quality;
+                qualityTextSpan.textContent = quality;
             }
         });
 
         // Controls
-        document.getElementById('startBtn')?.addEventListener('click', () => {
+        document.getElementById('startBtn').addEventListener('click', () => {
             if (!currentDevice) { showToast('Select a device first!'); return; }
             socket.emit('command', 'start');
             showToast('▶ Starting stream...');
-            videoPlaceholder.textContent = '📹 Starting...';
+            videoPlaceholder.style.display = 'flex';
+            videoPlaceholder.innerHTML = '<div class="placeholder-icon">⏳</div><div class="placeholder-text">Starting stream...</div>';
         });
 
-        document.getElementById('stopBtn')?.addEventListener('click', () => {
+        document.getElementById('stopBtn').addEventListener('click', () => {
             if (!currentDevice) { showToast('Select a device first!'); return; }
             socket.emit('command', 'stop');
             showToast('⏹ Stopping stream');
             videoPlaceholder.style.display = 'flex';
-            videoPlaceholder.textContent = '⏸ Stream stopped';
+            videoPlaceholder.innerHTML = '<div class="placeholder-icon">⏸</div><div class="placeholder-text">Stream stopped</div>';
+            streamImg.src = '';
         });
 
-        document.getElementById('flipBtn')?.addEventListener('click', () => {
+        document.getElementById('flipBtn').addEventListener('click', () => {
             if (!currentDevice) { showToast('Select a device first!'); return; }
             socket.emit('command', 'flip');
             showToast('🔄 Flipping camera...');
@@ -663,7 +677,6 @@ io.on('connection', (socket) => {
       const device = devices.get(socket.id);
       device.streaming = status;
       devices.set(socket.id, device);
-      io.emit('device_streaming', { deviceId: socket.id, streaming: status });
     }
   });
   
@@ -683,5 +696,5 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server on port ${PORT}`);
-  console.log('📱 Mobile optimized UI ready');
+  console.log('📱 Mobile optimized UI with Live Feed section');
 });
