@@ -3,25 +3,19 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 
+// limit for image frames
 app.use(express.json({ limit: "50mb" }));
 
 // ---------------- STATE ----------------
 let latestFrame = null;
 let isStreaming = false;
 
-// ---------------- ANDROID FRAME INPUT ----------------
-app.post("/frame", (req, res) => {
-    try {
-        if (!isStreaming) return res.sendStatus(403);
-
-        latestFrame = req.body.frame;
-        res.sendStatus(200);
-    } catch (e) {
-        res.sendStatus(500);
-    }
+// ---------------- ROOT (FIX "Cannot GET /") ----------------
+app.get("/", (req, res) => {
+    res.send("✅ Server Running Successfully");
 });
 
-// ---------------- START STREAM (FROM VERCEL) ----------------
+// ---------------- START STREAM ----------------
 app.post("/start", (req, res) => {
     isStreaming = true;
     console.log("STREAM STARTED");
@@ -34,6 +28,18 @@ app.post("/stop", (req, res) => {
     latestFrame = null;
     console.log("STREAM STOPPED");
     res.json({ status: "stopped" });
+});
+
+// ---------------- RECEIVE FRAME FROM ANDROID ----------------
+app.post("/frame", (req, res) => {
+    try {
+        if (!isStreaming) return res.sendStatus(403);
+
+        latestFrame = req.body.frame;
+        res.sendStatus(200);
+    } catch (e) {
+        res.sendStatus(500);
+    }
 });
 
 // ---------------- MJPEG STREAM (BROWSER VIEW) ----------------
@@ -67,7 +73,7 @@ app.get("/stream", (req, res) => {
     });
 });
 
-// ---------------- STATUS ----------------
+// ---------------- STATUS CHECK ----------------
 app.get("/status", (req, res) => {
     res.json({
         streaming: isStreaming,
@@ -75,6 +81,7 @@ app.get("/status", (req, res) => {
     });
 });
 
+// ---------------- START SERVER ----------------
 app.listen(PORT, () => {
     console.log("Server running on port " + PORT);
 });
