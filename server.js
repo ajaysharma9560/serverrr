@@ -1,302 +1,272 @@
 const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: "*" }
+});
 
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json({ limit: "50mb" }));
-
+/* ---------------- DEVICE STORE ---------------- */
 let devices = {};
-let latestFrame = null;
-let isStreaming = false;
 
-// ================= ROOT UI =================
+/* ---------------- AUTO OFFLINE CHECK ---------------- */
+setInterval(() => {
+  const now = Date.now();
+
+  Object.keys(devices).forEach(id => {
+    if (now - devices[id].lastSeen > 12000) {
+      devices[id].status = "offline";
+      devices[id].streaming = false;
+    }
+  });
+
+  io.emit("devices", devices);
+}, 4000);
+
+/* ---------------- DASHBOARD UI ---------------- */
 app.get("/", (req, res) => {
-    res.send(`
+  res.send(`
 <!DOCTYPE html>
 <html>
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mobile CCTV Dashboard</title>
-
+<title>Live Camera Panel</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <style>
-body {
-    margin:0;
-    font-family:Arial;
-    background:#0b0b0b;
-    color:white;
+body{
+  margin:0;
+  font-family:system-ui;
+  background:#070b10;
+  color:white;
 }
 
-/* HEADER */
-.header {
-    text-align:center;
-    padding:10px;
-    background:#111;
-    font-size:16px;
+.header{
+  padding:15px;
+  background:#0f1722;
+  font-weight:700;
 }
 
-/* LAYOUT */
-.container {
-    display:flex;
-    flex-direction:column;
+.container{
+  display:flex;
+  gap:10px;
+  padding:10px;
+  flex-wrap:wrap;
 }
 
-/* DEVICES */
-.devices {
-    background:#161616;
-    padding:10px;
-    max-height:120px;
-    overflow:auto;
-    font-size:13px;
+.box{
+  background:#0f1623;
+  padding:12px;
+  border-radius:12px;
+  border:1px solid #1f2a3a;
+  flex:1;
+  min-width:280px;
 }
 
-.device {
-    padding:6px;
-    margin:5px 0;
-    background:#222;
-    border-radius:6px;
+/* STREAM BOX */
+.stream{
+  position:relative;
+  background:black;
+  height:320px;
+  border-radius:12px;
+  overflow:hidden;
 }
 
-.online { color:#00ff88; }
-.offline { color:#ff4d4d; }
-
-/* LIVE PLAYER */
-.player {
-    margin:10px;
-    background:black;
-    border-radius:12px;
-    overflow:hidden;
-    border:2px solid #333;
+.stream img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
 }
 
-.player-header {
-    background:#1c1c1c;
-    padding:8px;
-    font-size:13px;
-    text-align:center;
+.live{
+  position:absolute;
+  top:10px;
+  left:10px;
+  background:red;
+  padding:4px 10px;
+  border-radius:20px;
+  font-size:12px;
+  font-weight:700;
 }
 
-/* VIDEO */
-img {
-    width:100%;
-    height:auto;
-    display:block;
+/* BUTTONS */
+.btns{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:8px;
+  margin-top:10px;
 }
 
-/* CONTROLS */
-.controls {
-    display:flex;
-    flex-wrap:wrap;
-    justify-content:center;
-    padding:10px;
-    gap:8px;
+button{
+  padding:10px;
+  border:none;
+  border-radius:8px;
+  font-weight:700;
+  cursor:pointer;
 }
 
-button {
-    flex:1;
-    min-width:90px;
-    padding:12px;
-    border:none;
-    border-radius:8px;
-    font-size:14px;
-    color:white;
+.start{background:#1f8f4d;color:white;}
+.stop{background:#b33939;color:white;}
+.flip{background:#2f3640;color:white;}
+
+.q{
+  margin-top:8px;
+  display:flex;
+  gap:5px;
+  flex-wrap:wrap;
 }
 
-.start { background:#1db954; }
-.stop { background:#e53935; }
-.flip { background:#ff9800; }
-.q { background:#1976d2; }
-
-@media (min-width: 768px) {
-    .container {
-        flex-direction:row;
-    }
-
-    .devices {
-        width:25%;
-        max-height:100vh;
-    }
-
-    .main {
-        width:75%;
-    }
+.q button{
+  flex:1;
+  background:#1a2433;
+  color:#cdd9ff;
 }
+.device{
+  padding:8px;
+  margin:5px 0;
+  background:#0b111b;
+  border-radius:8px;
+}
+.online{color:#2ecc71;}
+.offline{color:#7f8c8d;}
 </style>
 </head>
 
 <body>
 
-<div class="header">📡 MOBILE CCTV DASHBOARD</div>
+<div class="header">📡 LIVE CAMERA CONTROL PANEL</div>
 
 <div class="container">
 
-<!-- DEVICES -->
-<div class="devices">
-<h4>📱 Devices</h4>
-<div id="devices">Loading...</div>
+  <!-- DEVICE LIST -->
+  <div class="box">
+    <h3>📱 Devices</h3>
+    <div id="devices"></div>
+  </div>
+
+  <!-- STREAM -->
+  <div class="box">
+    <h3>🎥 Live Stream</h3>
+
+    <div class="stream">
+      <div class="live">LIVE</div>
+      <img id="video"/>
+    </div>
+
+    <div class="btns">
+      <button class="start" onclick="send('start')">▶ START</button>
+      <button class="stop" onclick="send('stop')">⏹ STOP</button>
+      <button class="flip" onclick="send('flip')">🔄 FLIP</button>
+    </div>
+
+    <div class="q">
+      <button onclick="sendQuality('120p')">120p</button>
+      <button onclick="sendQuality('240p')">240p</button>
+      <button onclick="sendQuality('360p')">360p</button>
+      <button onclick="sendQuality('480p')">480p</button>
+    </div>
+
+  </div>
+
 </div>
 
-<!-- MAIN -->
-<div class="main">
-
-<!-- PLAYER -->
-<div class="player">
-    <div class="player-header">🔴 LIVE STREAM</div>
-    <img src="/stream">
-</div>
-
-<!-- CONTROLS -->
-<div class="controls">
-<button class="start" onclick="start()">START</button>
-<button class="stop" onclick="stop()">STOP</button>
-<button class="flip" onclick="flip()">FLIP</button>
-</div>
-
-<div class="controls">
-<button class="q" onclick="quality('120p')">120p</button>
-<button class="q" onclick="quality('240p')">240p</button>
-<button class="q" onclick="quality('360p')">360p</button>
-</div>
-
-</div>
-</div>
-
+<script src="/socket.io/socket.io.js"></script>
 <script>
+const socket = io();
 
-async function start(){
-  await fetch("/start",{method:"POST"});
-}
+/* FRAME */
+socket.on("frame",(data)=>{
+  document.getElementById("video").src = data;
+});
 
-async function stop(){
-  await fetch("/stop",{method:"POST"});
-}
-
-async function flip(){
-  await fetch("/flip",{method:"POST"});
-}
-
-async function quality(q){
-  await fetch("/quality",{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({quality:q})
-  });
-}
-
-async function loadDevices(){
-  const res = await fetch("/devices");
-  const data = await res.json();
-
+/* DEVICE UPDATE */
+socket.on("devices",(data)=>{
   let html = "";
-
-  Object.values(data).forEach(d=>{
-    html += `<div class="device">
-      <b>${d.name}</b><br>
-      ${d.model}<br>
-      <span class="${d.status==='ONLINE'?'online':'offline'}">
-        ${d.status}
-      </span>
-    </div>`;
+  Object.keys(data).forEach(id=>{
+    let d = data[id];
+    html += \`
+      <div class="device">
+        <b>\${d.name}</b><br/>
+        <span class="\${d.status}">\${d.status}</span><br/>
+        streaming: \${d.streaming}
+      </div>
+    \`;
   });
+  document.getElementById("devices").innerHTML = html;
+});
 
-  document.getElementById("devices").innerHTML = html || "No devices";
+/* COMMAND */
+function send(cmd){
+  socket.emit("command",cmd);
 }
 
-setInterval(loadDevices,3000);
-loadDevices();
-
+function sendQuality(q){
+  socket.emit("command",{type:"quality",value:q});
+}
 </script>
 
 </body>
 </html>
-    `);
+  `);
 });
 
-// ================= STREAM =================
-app.get("/stream", (req, res) => {
+/* ---------------- SOCKET LOGIC ---------------- */
+io.on("connection", (socket) => {
 
-    res.writeHead(200, {
-        "Content-Type": "multipart/x-mixed-replace; boundary=frame",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive"
-    });
+  console.log("connected:", socket.id);
 
-    const interval = setInterval(() => {
-
-        if (!isStreaming || !latestFrame) return;
-
-        const img = Buffer.from(
-            latestFrame.replace("data:image/jpeg;base64,", ""),
-            "base64"
-        );
-
-        res.write("--frame\r\n");
-        res.write("Content-Type: image/jpeg\r\n");
-        res.write("Content-Length: " + img.length + "\r\n\r\n");
-        res.write(img);
-        res.write("\r\n");
-
-    }, 100);
-
-    req.on("close", () => clearInterval(interval));
-});
-
-// ================= CONTROL =================
-app.post("/start", (req, res) => {
-    isStreaming = true;
-    res.json({ status: "started" });
-});
-
-app.post("/stop", (req, res) => {
-    isStreaming = false;
-    latestFrame = null;
-    res.json({ status: "stopped" });
-});
-
-// ================= FRAME =================
-app.post("/frame", (req, res) => {
-    if (!isStreaming) return res.sendStatus(403);
-    latestFrame = req.body.frame;
-    res.sendStatus(200);
-});
-
-// ================= DEVICE SYSTEM =================
-app.post("/register_device", (req, res) => {
-
-    const id = req.body.deviceId || Date.now().toString();
-
-    devices[id] = {
-        id,
-        name: req.body.name,
-        model: req.body.model,
-        status: "ONLINE",
-        lastSeen: Date.now()
+  /* DEVICE REGISTER */
+  socket.on("register_device",(data)=>{
+    devices[socket.id] = {
+      id: socket.id,
+      name: data.name || "Device",
+      status: "online",
+      streaming: false,
+      lastSeen: Date.now()
     };
 
-    res.json({ ok: true });
-});
+    io.emit("devices", devices);
+  });
 
-app.post("/heartbeat", (req, res) => {
-    const id = req.body.deviceId;
-    if (devices[id]) {
-        devices[id].status = "ONLINE";
-        devices[id].lastSeen = Date.now();
+  /* HEARTBEAT */
+  socket.on("heartbeat",()=>{
+    if(devices[socket.id]){
+      devices[socket.id].lastSeen = Date.now();
+      devices[socket.id].status = "online";
     }
-    res.sendStatus(200);
+  });
+
+  /* STREAM ON/OFF */
+  socket.on("streaming_status",(s)=>{
+    if(devices[socket.id]){
+      devices[socket.id].streaming = s;
+    }
+    io.emit("devices",devices);
+  });
+
+  /* FRAME FROM APK */
+  socket.on("frame",(data)=>{
+    io.emit("frame",data);
+  });
+
+  /* COMMAND TO APK */
+  socket.on("command",(cmd)=>{
+    io.emit("command",cmd);
+  });
+
+  /* DISCONNECT */
+  socket.on("disconnect",()=>{
+    if(devices[socket.id]){
+      devices[socket.id].status = "offline";
+      devices[socket.id].streaming = false;
+    }
+    io.emit("devices",devices);
+  });
+
 });
 
-// auto offline detection
-setInterval(() => {
-    const now = Date.now();
-    Object.values(devices).forEach(d => {
-        if (now - d.lastSeen > 10000) d.status = "OFFLINE";
-    });
-}, 5000);
-
-// ================= DEVICES =================
-app.get("/devices", (req, res) => {
-    res.json(devices);
-});
-
-app.listen(PORT, () => {
-    console.log("🚀 MOBILE SERVER RUNNING ON " + PORT);
+server.listen(PORT,()=>{
+  console.log("Server running on",PORT);
 });
