@@ -5,112 +5,159 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: "50mb" }));
 
-// ================= STATE =================
 let devices = {};
 let latestFrame = null;
 let isStreaming = false;
-let currentQuality = "240p";
 
-// ================= ROOT DASHBOARD =================
+// ================= ROOT UI =================
 app.get("/", (req, res) => {
     res.send(`
 <!DOCTYPE html>
 <html>
 <head>
-<title>Live Camera System</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mobile CCTV Dashboard</title>
+
 <style>
-body { margin:0; font-family:Arial; background:#0f0f0f; color:white; }
+body {
+    margin:0;
+    font-family:Arial;
+    background:#0b0b0b;
+    color:white;
+}
 
+/* HEADER */
 .header {
-  text-align:center;
-  padding:10px;
-  background:#111;
+    text-align:center;
+    padding:10px;
+    background:#111;
+    font-size:16px;
 }
 
+/* LAYOUT */
 .container {
-  display:flex;
-  height:100vh;
+    display:flex;
+    flex-direction:column;
 }
 
-.sidebar {
-  width:25%;
-  background:#1b1b1b;
-  padding:10px;
-  overflow:auto;
-}
-
-.main {
-  width:75%;
-  padding:10px;
-  text-align:center;
+/* DEVICES */
+.devices {
+    background:#161616;
+    padding:10px;
+    max-height:120px;
+    overflow:auto;
+    font-size:13px;
 }
 
 .device {
-  background:#333;
-  margin:5px;
-  padding:8px;
-  border-radius:6px;
+    padding:6px;
+    margin:5px 0;
+    background:#222;
+    border-radius:6px;
 }
 
-.online { color:lime; }
-.offline { color:red; }
+.online { color:#00ff88; }
+.offline { color:#ff4d4d; }
+
+/* LIVE PLAYER */
+.player {
+    margin:10px;
+    background:black;
+    border-radius:12px;
+    overflow:hidden;
+    border:2px solid #333;
+}
+
+.player-header {
+    background:#1c1c1c;
+    padding:8px;
+    font-size:13px;
+    text-align:center;
+}
+
+/* VIDEO */
+img {
+    width:100%;
+    height:auto;
+    display:block;
+}
+
+/* CONTROLS */
+.controls {
+    display:flex;
+    flex-wrap:wrap;
+    justify-content:center;
+    padding:10px;
+    gap:8px;
+}
 
 button {
-  padding:10px;
-  margin:5px;
-  border:none;
-  cursor:pointer;
-  border-radius:5px;
+    flex:1;
+    min-width:90px;
+    padding:12px;
+    border:none;
+    border-radius:8px;
+    font-size:14px;
+    color:white;
 }
 
-.start { background:green; color:white; }
-.stop { background:red; color:white; }
-.flip { background:orange; }
-.q { background:blue; color:white; }
+.start { background:#1db954; }
+.stop { background:#e53935; }
+.flip { background:#ff9800; }
+.q { background:#1976d2; }
 
-img {
-  width:90%;
-  max-width:700px;
-  border:2px solid #444;
+@media (min-width: 768px) {
+    .container {
+        flex-direction:row;
+    }
+
+    .devices {
+        width:25%;
+        max-height:100vh;
+    }
+
+    .main {
+        width:75%;
+    }
 }
 </style>
 </head>
 
 <body>
 
-<div class="header">
-<h2>📡 LIVE CAMERA DASHBOARD</h2>
-</div>
+<div class="header">📡 MOBILE CCTV DASHBOARD</div>
 
 <div class="container">
 
-<!-- SIDEBAR -->
-<div class="sidebar">
-<h3>📱 Devices</h3>
+<!-- DEVICES -->
+<div class="devices">
+<h4>📱 Devices</h4>
 <div id="devices">Loading...</div>
 </div>
 
 <!-- MAIN -->
 <div class="main">
 
-<h3>🎥 Live Stream</h3>
+<!-- PLAYER -->
+<div class="player">
+    <div class="player-header">🔴 LIVE STREAM</div>
+    <img src="/stream">
+</div>
 
-<img src="/stream" />
-
-<br>
-
+<!-- CONTROLS -->
+<div class="controls">
 <button class="start" onclick="start()">START</button>
 <button class="stop" onclick="stop()">STOP</button>
 <button class="flip" onclick="flip()">FLIP</button>
+</div>
 
-<br>
-
+<div class="controls">
 <button class="q" onclick="quality('120p')">120p</button>
 <button class="q" onclick="quality('240p')">240p</button>
 <button class="q" onclick="quality('360p')">360p</button>
-
 </div>
 
+</div>
 </div>
 
 <script>
@@ -151,7 +198,7 @@ async function loadDevices(){
     </div>`;
   });
 
-  document.getElementById("devices").innerHTML = html || "No Devices";
+  document.getElementById("devices").innerHTML = html || "No devices";
 }
 
 setInterval(loadDevices,3000);
@@ -164,82 +211,7 @@ loadDevices();
     `);
 });
 
-// ================= DEVICE REGISTER =================
-app.post("/register_device", (req, res) => {
-
-    const id = req.body.deviceId || Date.now().toString();
-
-    devices[id] = {
-        id,
-        name: req.body.name,
-        model: req.body.model,
-        type: req.body.type,
-        status: "ONLINE",
-        lastSeen: Date.now()
-    };
-
-    console.log("DEVICE ONLINE:", id);
-
-    res.json({ status: "registered", id });
-});
-
-// ================= HEARTBEAT =================
-app.post("/heartbeat", (req, res) => {
-
-    const id = req.body.deviceId;
-
-    if (devices[id]) {
-        devices[id].status = "ONLINE";
-        devices[id].lastSeen = Date.now();
-    }
-
-    res.sendStatus(200);
-});
-
-// ================= AUTO OFFLINE CHECK =================
-setInterval(() => {
-
-    const now = Date.now();
-
-    Object.values(devices).forEach(d => {
-        if (now - d.lastSeen > 10000) {
-            d.status = "OFFLINE";
-        }
-    });
-
-}, 5000);
-
-// ================= CONTROL =================
-app.post("/start", (req, res) => {
-    isStreaming = true;
-    res.json({ status: "started" });
-});
-
-app.post("/stop", (req, res) => {
-    isStreaming = false;
-    latestFrame = null;
-    res.json({ status: "stopped" });
-});
-
-app.post("/flip", (req, res) => {
-    console.log("FLIP REQUEST");
-    res.json({ status: "flip sent" });
-});
-
-app.post("/quality", (req, res) => {
-    currentQuality = req.body.quality;
-    console.log("QUALITY:", currentQuality);
-    res.json({ status: currentQuality });
-});
-
-// ================= FRAME INPUT =================
-app.post("/frame", (req, res) => {
-    if (!isStreaming) return res.sendStatus(403);
-    latestFrame = req.body.frame;
-    res.sendStatus(200);
-});
-
-// ================= MJPEG STREAM =================
+// ================= STREAM =================
 app.get("/stream", (req, res) => {
 
     res.writeHead(200, {
@@ -268,21 +240,63 @@ app.get("/stream", (req, res) => {
     req.on("close", () => clearInterval(interval));
 });
 
-// ================= DEVICES API =================
+// ================= CONTROL =================
+app.post("/start", (req, res) => {
+    isStreaming = true;
+    res.json({ status: "started" });
+});
+
+app.post("/stop", (req, res) => {
+    isStreaming = false;
+    latestFrame = null;
+    res.json({ status: "stopped" });
+});
+
+// ================= FRAME =================
+app.post("/frame", (req, res) => {
+    if (!isStreaming) return res.sendStatus(403);
+    latestFrame = req.body.frame;
+    res.sendStatus(200);
+});
+
+// ================= DEVICE SYSTEM =================
+app.post("/register_device", (req, res) => {
+
+    const id = req.body.deviceId || Date.now().toString();
+
+    devices[id] = {
+        id,
+        name: req.body.name,
+        model: req.body.model,
+        status: "ONLINE",
+        lastSeen: Date.now()
+    };
+
+    res.json({ ok: true });
+});
+
+app.post("/heartbeat", (req, res) => {
+    const id = req.body.deviceId;
+    if (devices[id]) {
+        devices[id].status = "ONLINE";
+        devices[id].lastSeen = Date.now();
+    }
+    res.sendStatus(200);
+});
+
+// auto offline detection
+setInterval(() => {
+    const now = Date.now();
+    Object.values(devices).forEach(d => {
+        if (now - d.lastSeen > 10000) d.status = "OFFLINE";
+    });
+}, 5000);
+
+// ================= DEVICES =================
 app.get("/devices", (req, res) => {
     res.json(devices);
 });
 
-// ================= STATUS =================
-app.get("/status", (req, res) => {
-    res.json({
-        streaming: isStreaming,
-        quality: currentQuality,
-        devices: Object.keys(devices).length
-    });
-});
-
-// ================= START SERVER =================
 app.listen(PORT, () => {
-    console.log("🚀 SERVER RUNNING ON PORT " + PORT);
+    console.log("🚀 MOBILE SERVER RUNNING ON " + PORT);
 });
