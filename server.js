@@ -25,86 +25,42 @@ let currentSettings = {
   flip: false
 };
 
-// 📱 Socket.IO Connection
+// Socket.IO Connection
 io.on('connection', (socket) => {
   console.log('📱 New connection:', socket.id);
   
-  // Register device from Android app
   socket.on('register_device', (data) => {
     const device = {
       id: socket.id,
       name: data.deviceName || data.model || "Android Device",
       model: data.model || "Unknown",
-      androidVersion: data.androidVersion || "Unknown",
       connectedAt: new Date().toISOString()
     };
-    
-    // Check if already exists
-    const existingIndex = connectedDevices.findIndex(d => d.id === socket.id);
-    if (existingIndex >= 0) {
-      connectedDevices[existingIndex] = device;
-    } else {
-      connectedDevices.push(device);
-    }
-    
+    connectedDevices.push(device);
     console.log(`✅ Device registered: ${device.name}`);
-    console.log(`📊 Total devices: ${connectedDevices.length}`);
-    
-    // Send current settings to new device
-    socket.emit('settings_update', currentSettings);
-    
-    // Broadcast updated device list to all clients
     io.emit('devices_list', connectedDevices);
   });
   
-  // Receive frame from Android
   socket.on('stream_frame', (data) => {
     if (data && data.image) {
       latestFrame = data.image;
-      // Broadcast to ALL web clients
-      io.emit('new_frame', { 
-        image: data.image,
-        timestamp: Date.now(),
-        settings: currentSettings
-      });
+      io.emit('new_frame', { image: data.image, timestamp: Date.now() });
     }
   });
   
-  // Receive command from web panel
   socket.on('command', (data) => {
-    console.log('📡 Command received:', data.command, data.value || '');
-    
-    // Forward command to Android device
-    if (data.deviceId) {
-      io.to(data.deviceId).emit('command', data);
-    } else {
-      io.emit('command', data);
-    }
-    
-    // Update local settings
-    if (data.command === 'quality' && data.value) {
-      currentSettings.quality = data.value;
-    } else if (data.command === 'resolution' && data.value) {
-      currentSettings.resolution = data.value;
-    } else if (data.command === 'fps' && data.value) {
-      currentSettings.fps = data.value;
-    } else if (data.command === 'flip') {
-      currentSettings.flip = !currentSettings.flip;
-    }
+    console.log('📡 Command:', data.command, data.value || '');
+    io.emit('command', data);
   });
   
-  // Handle disconnect
   socket.on('disconnect', () => {
-    console.log('❌ Disconnected:', socket.id);
     connectedDevices = connectedDevices.filter(d => d.id !== socket.id);
     io.emit('devices_list', connectedDevices);
+    console.log('❌ Disconnected');
   });
-  
-  // Send current device list to new client
-  socket.emit('devices_list', connectedDevices);
 });
 
-// 🌐 Web Interface - Complete Camera Controller
+// Single Page - All Features
 app.get('/', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -138,8 +94,8 @@ app.get('/', (req, res) => {
                 border-radius: 20px;
                 padding: 20px;
                 margin-bottom: 20px;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.3);
                 color: white;
+                text-align: center;
             }
             
             .header h1 {
@@ -149,29 +105,29 @@ app.get('/', (req, res) => {
             
             .header p {
                 opacity: 0.9;
+            }
+            
+            .status-bar {
+                display: flex;
+                justify-content: center;
+                gap: 20px;
+                margin-top: 15px;
+                flex-wrap: wrap;
+            }
+            
+            .status-card {
+                background: rgba(255,255,255,0.2);
+                padding: 8px 16px;
+                border-radius: 20px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
                 font-size: 14px;
             }
             
-            .device-info {
-                display: flex;
-                gap: 15px;
-                flex-wrap: wrap;
-                margin-top: 15px;
-            }
-            
-            .info-card {
-                background: rgba(255,255,255,0.2);
-                padding: 10px 20px;
-                border-radius: 12px;
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                backdrop-filter: blur(10px);
-            }
-            
-            .status-dot {
-                width: 12px;
-                height: 12px;
+            .dot {
+                width: 10px;
+                height: 10px;
                 border-radius: 50%;
                 background: #4CAF50;
                 animation: pulse 1.5s infinite;
@@ -200,7 +156,7 @@ app.get('/', (req, res) => {
             .video-container {
                 position: relative;
                 background: #000;
-                min-height: 500px;
+                min-height: 400px;
                 display: flex;
                 align-items: center;
                 justify-content: center;
@@ -208,7 +164,7 @@ app.get('/', (req, res) => {
             
             #videoStream {
                 width: 100%;
-                max-height: 70vh;
+                max-height: 60vh;
                 object-fit: contain;
             }
             
@@ -218,27 +174,9 @@ app.get('/', (req, res) => {
                 left: 15px;
                 background: rgba(0,0,0,0.8);
                 color: white;
-                padding: 8px 15px;
+                padding: 6px 12px;
                 border-radius: 20px;
                 font-size: 12px;
-                font-weight: bold;
-                backdrop-filter: blur(5px);
-            }
-            
-            .stream-status.active {
-                background: rgba(76, 175, 80, 0.9);
-            }
-            
-            .stream-info {
-                position: absolute;
-                bottom: 15px;
-                right: 15px;
-                background: rgba(0,0,0,0.7);
-                color: #888;
-                padding: 5px 10px;
-                border-radius: 10px;
-                font-size: 11px;
-                font-family: monospace;
             }
             
             /* Controls Section */
@@ -250,7 +188,7 @@ app.get('/', (req, res) => {
             }
             
             .control-group {
-                margin-bottom: 25px;
+                margin-bottom: 20px;
             }
             
             .control-group label {
@@ -261,7 +199,6 @@ app.get('/', (req, res) => {
                 font-size: 14px;
             }
             
-            /* Buttons */
             .btn-group {
                 display: flex;
                 gap: 10px;
@@ -276,29 +213,15 @@ app.get('/', (req, res) => {
                 font-weight: bold;
                 cursor: pointer;
                 transition: all 0.3s;
-            }
-            
-            .btn-start {
-                background: linear-gradient(135deg, #4CAF50, #45a049);
                 color: white;
             }
             
-            .btn-stop {
-                background: linear-gradient(135deg, #f44336, #da190b);
-                color: white;
-            }
+            .btn-start { background: #4CAF50; }
+            .btn-stop { background: #f44336; }
+            .btn-flip { background: #2196F3; }
+            .btn:hover { transform: translateY(-2px); opacity: 0.9; }
             
-            .btn-flip {
-                background: linear-gradient(135deg, #2196F3, #0b7dda);
-                color: white;
-            }
-            
-            .btn:hover {
-                transform: translateY(-2px);
-                box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-            }
-            
-            /* Resolution Grid */
+            /* Resolution & Quality Grids */
             .resolution-grid, .quality-grid {
                 display: grid;
                 grid-template-columns: repeat(3, 1fr);
@@ -306,19 +229,18 @@ app.get('/', (req, res) => {
             }
             
             .res-btn, .quality-btn {
-                padding: 10px;
+                padding: 8px;
                 border: 2px solid #e0e0e0;
                 background: #f5f5f5;
                 border-radius: 10px;
                 cursor: pointer;
                 font-size: 12px;
-                font-weight: 500;
                 transition: all 0.3s;
                 text-align: center;
             }
             
             .res-btn.active, .quality-btn.active {
-                background: linear-gradient(135deg, #667eea, #764ba2);
+                background: #667eea;
                 color: white;
                 border-color: #667eea;
             }
@@ -333,7 +255,6 @@ app.get('/', (req, res) => {
                 text-align: center;
                 font-size: 14px;
                 color: #666;
-                margin-top: 5px;
             }
             
             /* Device List */
@@ -348,27 +269,21 @@ app.get('/', (req, res) => {
             .devices-section h3 {
                 margin-bottom: 15px;
                 color: #333;
-                font-size: 18px;
             }
             
             .devices-list {
-                max-height: 300px;
+                max-height: 200px;
                 overflow-y: auto;
             }
             
             .device-item {
                 background: #f8f9fa;
-                padding: 12px;
-                border-radius: 12px;
-                margin-bottom: 10px;
+                padding: 10px;
+                border-radius: 10px;
+                margin-bottom: 8px;
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                transition: all 0.3s;
-            }
-            
-            .device-item:hover {
-                background: #e9ecef;
             }
             
             .device-name {
@@ -376,20 +291,9 @@ app.get('/', (req, res) => {
                 color: #333;
             }
             
-            .device-model {
-                font-size: 11px;
-                color: #888;
-                margin-top: 3px;
-            }
-            
             .device-status {
                 font-size: 12px;
                 color: #4CAF50;
-                font-weight: 500;
-            }
-            
-            .device-status.offline {
-                color: #f44336;
             }
             
             /* Responsive */
@@ -398,21 +302,6 @@ app.get('/', (req, res) => {
                     grid-template-columns: 1fr;
                 }
             }
-            
-            /* Scrollbar */
-            .devices-list::-webkit-scrollbar {
-                width: 6px;
-            }
-            
-            .devices-list::-webkit-scrollbar-track {
-                background: #f1f1f1;
-                border-radius: 10px;
-            }
-            
-            .devices-list::-webkit-scrollbar-thumb {
-                background: #888;
-                border-radius: 10px;
-            }
         </style>
     </head>
     <body>
@@ -420,15 +309,15 @@ app.get('/', (req, res) => {
             <div class="header">
                 <h1>📹 Camera Controller</h1>
                 <p>Live stream from your device</p>
-                <div class="device-info">
-                    <div class="info-card">
-                        <div class="status-dot"></div>
+                <div class="status-bar">
+                    <div class="status-card">
+                        <div class="dot"></div>
                         <span id="serverStatus">Server Online</span>
                     </div>
-                    <div class="info-card">
-                        📱 <span id="deviceCount">0</span> Device(s) Connected
+                    <div class="status-card">
+                        📱 <span id="deviceCount">0</span> Device(s)
                     </div>
-                    <div class="info-card">
+                    <div class="status-card">
                         🎬 <span id="fpsDisplay">0</span> FPS
                     </div>
                 </div>
@@ -437,19 +326,14 @@ app.get('/', (req, res) => {
             <div class="main-grid">
                 <div class="video-section">
                     <div class="video-container">
-                        <img id="videoStream" src="" alt="Live stream from your device">
-                        <div class="stream-status" id="streamStatus">
-                            🔴 No active stream
-                        </div>
-                        <div class="stream-info" id="streamInfo">
-                            640x480 | 30 FPS
-                        </div>
+                        <img id="videoStream" src="" alt="Live stream">
+                        <div class="stream-status" id="streamStatus">🔴 No stream</div>
                     </div>
                 </div>
                 
                 <div class="controls-section">
                     <div class="control-group">
-                        <label>🎮 Camera Controls</label>
+                        <label>🎮 Controls</label>
                         <div class="btn-group">
                             <button class="btn btn-start" id="startBtn">▶ START</button>
                             <button class="btn btn-stop" id="stopBtn">⏹ STOP</button>
@@ -479,7 +363,7 @@ app.get('/', (req, res) => {
                     </div>
                     
                     <div class="control-group">
-                        <label>⚡ FPS (Frames Per Second)</label>
+                        <label>⚡ FPS</label>
                         <input type="range" id="fpsSlider" min="5" max="60" value="30" class="fps-slider">
                         <div class="fps-value" id="fpsValue">30 FPS</div>
                     </div>
@@ -489,7 +373,7 @@ app.get('/', (req, res) => {
             <div class="devices-section">
                 <h3>📱 Connected Devices</h3>
                 <div class="devices-list" id="devicesContainer">
-                    <div style="text-align: center; color: #999; padding: 20px;">No devices connected</div>
+                    <div style="text-align: center; color: #999;">No devices connected</div>
                 </div>
             </div>
         </div>
@@ -500,74 +384,59 @@ app.get('/', (req, res) => {
             let frameCount = 0;
             let lastFpsUpdate = Date.now();
             
-            // DOM Elements
+            // Get elements
             const videoStream = document.getElementById('videoStream');
             const streamStatus = document.getElementById('streamStatus');
             const deviceCountSpan = document.getElementById('deviceCount');
             const devicesContainer = document.getElementById('devicesContainer');
             const fpsDisplay = document.getElementById('fpsDisplay');
-            const streamInfo = document.getElementById('streamInfo');
             const fpsSlider = document.getElementById('fpsSlider');
             const fpsValue = document.getElementById('fpsValue');
             
-            // Socket Events
+            // Socket events
             socket.on('connect', () => {
-                console.log('Connected to server');
-                document.getElementById('serverStatus').innerHTML = '● Server Online';
+                document.getElementById('serverStatus').innerHTML = '● Online';
             });
             
             socket.on('new_frame', (data) => {
                 if (data && data.image) {
                     videoStream.src = 'data:image/jpeg;base64,' + data.image;
-                    streamStatus.innerHTML = '✅ LIVE STREAMING';
-                    streamStatus.classList.add('active');
+                    streamStatus.innerHTML = '✅ LIVE';
+                    streamStatus.style.background = 'rgba(76,175,80,0.9)';
                     
-                    // Calculate FPS
                     frameCount++;
                     const now = Date.now();
                     if (now - lastFpsUpdate >= 1000) {
-                        const fps = Math.round(frameCount * 1000 / (now - lastFpsUpdate));
-                        fpsDisplay.textContent = fps;
+                        fpsDisplay.textContent = frameCount;
                         frameCount = 0;
                         lastFpsUpdate = now;
-                    }
-                    
-                    // Update stream info
-                    if (data.settings) {
-                        streamInfo.textContent = data.settings.resolution + ' | ' + data.settings.fps + ' FPS';
                     }
                 }
             });
             
             socket.on('devices_list', (devices) => {
                 deviceCountSpan.textContent = devices.length;
-                
                 if (devices.length === 0) {
-                    devicesContainer.innerHTML = '<div style="text-align: center; color: #999; padding: 20px;">No devices connected</div>';
+                    devicesContainer.innerHTML = '<div style="text-align: center; color: #999;">No devices connected</div>';
+                    streamStatus.innerHTML = '🔴 No device';
+                    streamStatus.style.background = 'rgba(0,0,0,0.8)';
                 } else {
-                    devicesContainer.innerHTML = devices.map(device => `
-                        <div class="device-item">
-                            <div>
-                                <div class="device-name">📱 ${device.name}</div>
-                                <div class="device-model">${device.model} | ${device.androidVersion}</div>
-                            </div>
-                            <div class="device-status">● Online</div>
-                        </div>
-                    `).join('');
+                    devicesContainer.innerHTML = devices.map(device => 
+                        '<div class="device-item"><div class="device-name">📱 ' + device.name + '</div><div class="device-status">● Online</div></div>'
+                    ).join('');
+                    streamStatus.innerHTML = '🟡 Device ready';
+                    streamStatus.style.background = 'rgba(255,152,0,0.9)';
                 }
             });
             
             // Send command function
             function sendCommand(command, value = null) {
                 const data = { command };
-                if (value !== null) {
-                    data.value = value;
-                }
+                if (value !== null) data.value = value;
                 socket.emit('command', data);
-                console.log('Command sent:', command, value);
             }
             
-            // Button Events
+            // Button events
             document.getElementById('startBtn').onclick = () => sendCommand('start');
             document.getElementById('stopBtn').onclick = () => sendCommand('stop');
             document.getElementById('flipBtn').onclick = () => sendCommand('flip');
@@ -577,8 +446,7 @@ app.get('/', (req, res) => {
                 btn.onclick = () => {
                     document.querySelectorAll('.res-btn').forEach(b => b.classList.remove('active'));
                     btn.classList.add('active');
-                    const resolution = btn.dataset.res;
-                    sendCommand('resolution', resolution);
+                    sendCommand('resolution', btn.dataset.res);
                 };
             });
             
@@ -587,21 +455,14 @@ app.get('/', (req, res) => {
                 btn.onclick = () => {
                     document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
                     btn.classList.add('active');
-                    const quality = parseInt(btn.dataset.quality);
-                    sendCommand('quality', quality);
+                    sendCommand('quality', parseInt(btn.dataset.quality));
                 };
             });
             
-            // FPS Slider
+            // FPS slider
             fpsSlider.oninput = () => {
                 const fps = parseInt(fpsSlider.value);
                 fpsValue.textContent = fps + ' FPS';
-                sendCommand('fps', fps);
-            };
-            
-            // Update FPS display on slider change
-            fpsSlider.onchange = () => {
-                const fps = parseInt(fpsSlider.value);
                 sendCommand('fps', fps);
             };
         </script>
@@ -610,13 +471,12 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Health check endpoint
+// Health check
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     devices: connectedDevices.length,
     hasFrame: latestFrame !== null,
-    settings: currentSettings,
     uptime: process.uptime()
   });
 });
@@ -631,14 +491,8 @@ server.listen(PORT, () => {
   console.log(`💪 Health Check: http://localhost:${PORT}/health`);
   console.log('═══════════════════════════════════════════════════');
   console.log('');
-  console.log('📱 Features Available:');
-  console.log('   ▶ Start/Stop Streaming');
-  console.log('   🔄 Flip Camera (Front/Back)');
-  console.log('   📐 Resolutions: 120p, 140p, 240p, 360p, 480p, 720p');
-  console.log('   🎨 Quality: Low, Medium, High');
-  console.log('   ⚡ FPS Control: 5-60 FPS');
-  console.log('   📱 Device Panel with connected devices');
+  console.log('📱 Features: Start/Stop | Flip | 120p-720p | Quality | FPS');
   console.log('');
-  console.log('📡 Waiting for Android device to connect...');
+  console.log('📡 Waiting for Android device...');
   console.log('');
 });
