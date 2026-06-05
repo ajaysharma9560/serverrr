@@ -1,8 +1,15 @@
 {
-  "name": "stream-server",
+  "name": "ludoo-camera-controller",
   "version": "1.0.0",
+  "description": "Camera controller with web interface",
   "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
   "dependencies": {
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "socket.io": "^4.6.1",
+    "cors": "^2.8.5"
   }
 }
