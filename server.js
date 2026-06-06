@@ -19,6 +19,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Store connected devices
 let connectedDevices = [];
+let currentFrame = null;
 
 io.on('connection', (socket) => {
   console.log('📱 New connection:', socket.id);
@@ -38,7 +39,8 @@ io.on('connection', (socket) => {
       connectedAt: new Date()
     };
     connectedDevices.push(device);
-    console.log(`✅ Device registered: ${device.name} (${device.camera} camera)`);
+    console.log(`✅ Device registered: ${device.name}`);
+    console.log(`📊 Total devices: ${connectedDevices.length}`);
     
     io.emit('devices_list', connectedDevices);
   });
@@ -46,12 +48,13 @@ io.on('connection', (socket) => {
   // Receive stream_frame from Android
   socket.on('stream_frame', (data) => {
     if (data && data.image) {
+      currentFrame = data.image;
       io.emit('new_frame', {
         image: data.image,
         timestamp: data.timestamp,
-        quality: data.quality,
-        fps: data.fps,
-        camera: data.camera
+        quality: data.quality || 240,
+        fps: data.fps || 15,
+        camera: data.camera || 'back'
       });
     }
   });
@@ -73,6 +76,7 @@ io.on('connection', (socket) => {
     connectedDevices = connectedDevices.filter(d => d.id !== socket.id);
     io.emit('devices_list', connectedDevices);
     console.log('❌ Device disconnected');
+    console.log(`📊 Remaining devices: ${connectedDevices.length}`);
   });
 });
 
@@ -148,6 +152,10 @@ app.get('/', (req, res) => {
                 font-weight: 700;
             }
             
+            .status-value.online {
+                color: #4CAF50;
+            }
+            
             /* Main Content */
             .main-content {
                 display: grid;
@@ -183,6 +191,17 @@ app.get('/', (req, res) => {
                 text-align: center;
                 color: #6c7293;
                 padding: 60px 20px;
+            }
+            
+            .stream-status {
+                position: absolute;
+                top: 15px;
+                left: 15px;
+                background: rgba(0,0,0,0.7);
+                padding: 5px 12px;
+                border-radius: 20px;
+                font-size: 11px;
+                color: white;
             }
             
             /* Controls Section */
@@ -226,8 +245,16 @@ app.get('/', (req, res) => {
                 background: #4CAF50;
             }
             
+            .btn-live.start:hover {
+                background: #45a049;
+            }
+            
             .btn-live.stop {
                 background: #f44336;
+            }
+            
+            .btn-live.stop:hover {
+                background: #da190b;
             }
             
             .btn-camera {
@@ -241,6 +268,10 @@ app.get('/', (req, res) => {
                 background: #2196F3;
                 color: white;
                 transition: all 0.3s;
+            }
+            
+            .btn-camera:hover {
+                background: #0b7dda;
             }
             
             /* Quality Options */
@@ -365,6 +396,12 @@ app.get('/', (req, res) => {
                 height: 8px;
                 background: #4CAF50;
                 border-radius: 50%;
+                animation: pulse 1.5s infinite;
+            }
+            
+            @keyframes pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.5; }
             }
             
             .camera-badge {
@@ -393,14 +430,14 @@ app.get('/', (req, res) => {
     <body>
         <div class="container">
             <div class="header">
-                <h1>Multi-Device Remote</h1>
-                <p>Select a device to view</p>
+                <h1>Ludoo Camera Controller</h1>
+                <p>Multi-Device Remote Camera Control</p>
             </div>
             
             <div class="status-cards">
                 <div class="status-card">
                     <div class="status-label">STATUS</div>
-                    <div class="status-value" id="serverStatus">Online</div>
+                    <div class="status-value online" id="serverStatus">● Online</div>
                 </div>
                 <div class="status-card">
                     <div class="status-label">DEVICES</div>
@@ -421,21 +458,22 @@ app.get('/', (req, res) => {
                     <div class="video-container">
                         <img id="videoStream" src="" style="display: none;">
                         <div id="noStream" class="stream-placeholder">
-                            <p>Camera Stream<br>No stream</p>
+                            🔴 No active stream<br><span style="font-size: 12px;">Connect a device and press START</span>
                         </div>
+                        <div class="stream-status" id="streamStatus">Waiting</div>
                     </div>
                 </div>
                 
                 <div class="controls-section">
-                    <div class="section-title">CONTROLS</div>
+                    <div class="section-title">🎮 CONTROLS</div>
                     
                     <div class="live-controls">
-                        <button class="btn-live start" id="startBtn">▶ LIVE</button>
+                        <button class="btn-live start" id="startBtn">▶ START</button>
                         <button class="btn-live stop" id="stopBtn">⏹ STOP</button>
-                        <button class="btn-camera" id="flipBtn">📷 CAMERA</button>
+                        <button class="btn-camera" id="flipBtn">🔄 FLIP CAMERA</button>
                     </div>
                     
-                    <div class="section-title">QUALITY</div>
+                    <div class="section-title">📐 QUALITY</div>
                     <div class="quality-options">
                         <button class="quality-btn" data-quality="120">120p</button>
                         <button class="quality-btn" data-quality="140">140p</button>
@@ -443,10 +481,10 @@ app.get('/', (req, res) => {
                         <button class="quality-btn" data-quality="360">360p</button>
                     </div>
                     
-                    <div class="section-title">FPS</div>
+                    <div class="section-title">⚡ FPS CONTROL</div>
                     <div class="fps-control">
                         <div class="fps-label">
-                            <span>Frame Rate</span>
+                            <span>Frames Per Second</span>
                             <span id="fpsValue">15</span>
                         </div>
                         <input type="range" id="fpsSlider" min="5" max="30" value="15" step="5" class="fps-slider">
@@ -456,7 +494,7 @@ app.get('/', (req, res) => {
             
             <div class="devices-section">
                 <div class="device-header">
-                    <h3>CONNECTED DEVICES</h3>
+                    <h3>📱 CONNECTED DEVICES</h3>
                     <div class="device-count" id="deviceCountBadge">0</div>
                 </div>
                 <div class="devices-list" id="devicesContainer">
@@ -473,6 +511,7 @@ app.get('/', (req, res) => {
             
             const videoStream = document.getElementById('videoStream');
             const noStream = document.getElementById('noStream');
+            const streamStatus = document.getElementById('streamStatus');
             const deviceCountSpan = document.getElementById('deviceCount');
             const deviceCountBadge = document.getElementById('deviceCountBadge');
             const devicesContainer = document.getElementById('devicesContainer');
@@ -482,8 +521,14 @@ app.get('/', (req, res) => {
             const fpsValue = document.getElementById('fpsValue');
             
             socket.on('connect', () => {
-                document.getElementById('serverStatus').innerHTML = 'Online';
                 console.log('Connected to server');
+                streamStatus.innerHTML = 'Connected';
+                streamStatus.style.background = '#4CAF50';
+            });
+            
+            socket.on('disconnect', () => {
+                streamStatus.innerHTML = 'Disconnected';
+                streamStatus.style.background = '#f44336';
             });
             
             socket.on('new_frame', (data) => {
@@ -491,12 +536,14 @@ app.get('/', (req, res) => {
                     videoStream.src = 'data:image/jpeg;base64,' + data.image;
                     videoStream.style.display = 'block';
                     noStream.style.display = 'none';
+                    streamStatus.innerHTML = 'LIVE';
+                    streamStatus.style.background = '#f44336';
                     
                     frameCount++;
                     const now = Date.now();
                     if (now - lastFpsUpdate >= 1000) {
                         fpsDisplay.textContent = frameCount;
-                        qualityDisplay.textContent = data.quality + 'p';
+                        qualityDisplay.textContent = (data.quality || 240) + 'p';
                         frameCount = 0;
                         lastFpsUpdate = now;
                     }
@@ -511,6 +558,8 @@ app.get('/', (req, res) => {
                     devicesContainer.innerHTML = '<div style="text-align: center; color: #6c7293; padding: 20px;">No devices connected</div>';
                     videoStream.style.display = 'none';
                     noStream.style.display = 'block';
+                    streamStatus.innerHTML = 'No device';
+                    streamStatus.style.background = '#666';
                 } else {
                     devicesContainer.innerHTML = devices.map(device => `
                         <div class="device-item">
@@ -522,6 +571,8 @@ app.get('/', (req, res) => {
                             <div class="camera-badge">${device.camera || 'back'}</div>
                         </div>
                     `).join('');
+                    streamStatus.innerHTML = 'Device ready';
+                    streamStatus.style.background = '#ff9800';
                 }
             });
             
@@ -555,11 +606,12 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Health check
+// Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     devices: connectedDevices.length,
+    hasFrame: currentFrame !== null,
     uptime: process.uptime()
   });
 });
@@ -570,11 +622,16 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('═══════════════════════════════════════════════════');
   console.log('✅ Ludoo Camera Controller Server Started');
   console.log('═══════════════════════════════════════════════════');
-  console.log(`🌐 Web Interface: http://0.0.0.0:${PORT}`);
-  console.log(`💪 Health Check: http://0.0.0.0:${PORT}/health`);
+  console.log(`🌐 Web Interface: http://localhost:${PORT}`);
+  console.log(`💪 Health Check: http://localhost:${PORT}/health`);
   console.log('═══════════════════════════════════════════════════');
   console.log('');
-  console.log('📱 Features: Start/Stop | Flip Camera | 4 Qualities | FPS Control');
+  console.log('📱 Features:');
+  console.log('   • START / STOP streaming');
+  console.log('   • FLIP camera (Front/Back)');
+  console.log('   • 4 Quality options: 120p, 140p, 240p, 360p');
+  console.log('   • FPS Control: 5-30 FPS');
+  console.log('   • Multi-device support');
   console.log('');
   console.log('📡 Waiting for Android device...');
   console.log('');
