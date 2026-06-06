@@ -39,9 +39,19 @@ io.on('connection', (socket) => {
       connectedAt: new Date().toLocaleTimeString()
     };
     
-    connectedDevices.push(device);
+    // Check if already exists
+    const existingIndex = connectedDevices.findIndex(d => d.id === socket.id);
+    if (existingIndex >= 0) {
+      connectedDevices[existingIndex] = device;
+    } else {
+      connectedDevices.push(device);
+    }
+    
     console.log(`✅ Device registered: ${device.name}`);
     console.log(`📊 Total devices: ${connectedDevices.length}`);
+    
+    // ✅ IMPORTANT: Broadcast to ALL web clients
+    io.emit('devices_list', connectedDevices);
     
     // Send current settings to device
     socket.emit('settings', {
@@ -50,8 +60,7 @@ io.on('connection', (socket) => {
       stream: activeStream
     });
     
-    // Update web panel
-    io.emit('devices_list', connectedDevices);
+    // Update status for web
     io.emit('status_update', {
       devices: connectedDevices.length,
       stream: activeStream,
@@ -62,7 +71,6 @@ io.on('connection', (socket) => {
   
   socket.on('stream_frame', (data) => {
     if (data && data.image && activeStream) {
-      // Broadcast to all web clients
       io.emit('frame', {
         image: data.image,
         timestamp: Date.now(),
@@ -72,13 +80,10 @@ io.on('connection', (socket) => {
     }
   });
   
-  socket.on('device_status', (data) => {
-    console.log(`📊 Device status: ${data.status}`);
-  });
-  
   socket.on('disconnect', () => {
     console.log('❌ Device disconnected:', socket.id);
     connectedDevices = connectedDevices.filter(d => d.id !== socket.id);
+    // ✅ Broadcast updated list
     io.emit('devices_list', connectedDevices);
     io.emit('status_update', {
       devices: connectedDevices.length,
@@ -86,6 +91,7 @@ io.on('connection', (socket) => {
       quality: currentQuality,
       fps: currentFps
     });
+    console.log(`📊 Remaining devices: ${connectedDevices.length}`);
   });
   
   // ========== WEB COMMAND HANDLER ==========
@@ -117,7 +123,7 @@ io.on('connection', (socket) => {
         break;
     }
     
-    // Forward command to all connected Android devices
+    // Forward to all Android devices
     connectedDevices.forEach(device => {
       io.to(device.id).emit('command', { command, value });
     });
@@ -131,14 +137,16 @@ io.on('connection', (socket) => {
     });
   });
   
-  // Send initial status to new web client
+  // ========== SEND INITIAL DATA TO WEB CLIENT ==========
+  
+  // ✅ Send current device list to new web client
+  socket.emit('devices_list', connectedDevices);
   socket.emit('status_update', {
     devices: connectedDevices.length,
     stream: activeStream,
     quality: currentQuality,
     fps: currentFps
   });
-  socket.emit('devices_list', connectedDevices);
 });
 
 // ========== WEB INTERFACE ==========
@@ -152,264 +160,58 @@ app.get('/', (req, res) => {
         <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
         <title>Ludoo Camera Remote</title>
         <style>
-            * {
-                margin: 0;
-                padding: 0;
-                box-sizing: border-box;
-            }
-            
+            * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                 background: #0a0a0a;
                 min-height: 100vh;
                 padding: 20px;
                 color: #fff;
             }
+            .container { max-width: 600px; margin: 0 auto; }
+            .header { text-align: center; margin-bottom: 20px; }
+            .header h1 { font-size: 24px; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+            .header p { font-size: 12px; color: #666; margin-top: 5px; }
             
-            .container {
-                max-width: 600px;
-                margin: 0 auto;
-            }
+            .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
+            .stat-card { background: #1a1a1a; border-radius: 12px; padding: 12px; text-align: center; border: 1px solid #2a2a2a; }
+            .stat-label { font-size: 11px; color: #888; margin-bottom: 5px; }
+            .stat-value { font-size: 20px; font-weight: 700; }
+            .stat-value.online { color: #4CAF50; }
+            .stat-value.streaming { color: #f44336; animation: pulse 1s infinite; }
+            @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
             
-            /* Header */
-            .header {
-                text-align: center;
-                margin-bottom: 20px;
-            }
+            .video-container { background: #000; border-radius: 16px; overflow: hidden; aspect-ratio: 16 / 9; margin-bottom: 20px; border: 1px solid #2a2a2a; display: flex; align-items: center; justify-content: center; }
+            #video { width: 100%; height: 100%; object-fit: cover; }
+            .video-placeholder { text-align: center; color: #555; }
+            .video-placeholder span { font-size: 48px; }
             
-            .header h1 {
-                font-size: 24px;
-                font-weight: 600;
-                background: linear-gradient(135deg, #667eea, #764ba2);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            }
+            .controls { background: #1a1a1a; border-radius: 16px; padding: 16px; margin-bottom: 20px; border: 1px solid #2a2a2a; }
+            .section-title { font-size: 12px; color: #888; margin-bottom: 12px; letter-spacing: 1px; }
+            .button-group { display: flex; gap: 12px; margin-bottom: 20px; }
+            .btn { flex: 1; padding: 12px; border: none; border-radius: 12px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+            .btn-start { background: #4CAF50; color: white; }
+            .btn-start:hover { background: #45a049; }
+            .btn-stop { background: #f44336; color: white; }
+            .btn-stop:hover { background: #da190b; }
+            .btn-flip { background: #2196F3; color: white; }
+            .btn-flip:hover { background: #0b7dda; }
             
-            .header p {
-                font-size: 12px;
-                color: #666;
-                margin-top: 5px;
-            }
+            .quality-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 20px; }
+            .quality-btn { padding: 10px; border: 1px solid #2a2a2a; background: #0a0a0a; color: #fff; border-radius: 10px; cursor: pointer; font-size: 12px; text-align: center; }
+            .quality-btn.active { background: #667eea; border-color: #667eea; }
             
-            /* Status Cards */
-            .stats {
-                display: grid;
-                grid-template-columns: repeat(3, 1fr);
-                gap: 12px;
-                margin-bottom: 20px;
-            }
+            .fps-control { margin-top: 16px; }
+            .fps-slider { width: 100%; height: 4px; -webkit-appearance: none; background: #2a2a2a; border-radius: 2px; margin: 10px 0; }
+            .fps-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: #667eea; border-radius: 50%; cursor: pointer; }
+            .fps-value { text-align: center; font-size: 12px; color: #888; }
             
-            .stat-card {
-                background: #1a1a1a;
-                border-radius: 12px;
-                padding: 12px;
-                text-align: center;
-                border: 1px solid #2a2a2a;
-            }
-            
-            .stat-label {
-                font-size: 11px;
-                color: #888;
-                margin-bottom: 5px;
-            }
-            
-            .stat-value {
-                font-size: 20px;
-                font-weight: 700;
-            }
-            
-            .stat-value.online {
-                color: #4CAF50;
-            }
-            
-            .stat-value.streaming {
-                color: #f44336;
-                animation: pulse 1s infinite;
-            }
-            
-            @keyframes pulse {
-                0%, 100% { opacity: 1; }
-                50% { opacity: 0.6; }
-            }
-            
-            /* Video Container */
-            .video-container {
-                background: #000;
-                border-radius: 16px;
-                overflow: hidden;
-                aspect-ratio: 16 / 9;
-                margin-bottom: 20px;
-                border: 1px solid #2a2a2a;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }
-            
-            #video {
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-            }
-            
-            .video-placeholder {
-                text-align: center;
-                color: #555;
-            }
-            
-            .video-placeholder span {
-                font-size: 48px;
-            }
-            
-            /* Controls */
-            .controls {
-                background: #1a1a1a;
-                border-radius: 16px;
-                padding: 16px;
-                margin-bottom: 20px;
-                border: 1px solid #2a2a2a;
-            }
-            
-            .section-title {
-                font-size: 12px;
-                color: #888;
-                margin-bottom: 12px;
-                letter-spacing: 1px;
-            }
-            
-            .button-group {
-                display: flex;
-                gap: 12px;
-                margin-bottom: 20px;
-            }
-            
-            .btn {
-                flex: 1;
-                padding: 12px;
-                border: none;
-                border-radius: 12px;
-                font-size: 14px;
-                font-weight: 600;
-                cursor: pointer;
-                transition: all 0.2s;
-            }
-            
-            .btn-start {
-                background: #4CAF50;
-                color: white;
-            }
-            
-            .btn-start:hover {
-                background: #45a049;
-            }
-            
-            .btn-stop {
-                background: #f44336;
-                color: white;
-            }
-            
-            .btn-stop:hover {
-                background: #da190b;
-            }
-            
-            .btn-flip {
-                background: #2196F3;
-                color: white;
-            }
-            
-            .btn-flip:hover {
-                background: #0b7dda;
-            }
-            
-            /* Quality Grid */
-            .quality-grid {
-                display: grid;
-                grid-template-columns: repeat(4, 1fr);
-                gap: 8px;
-                margin-bottom: 20px;
-            }
-            
-            .quality-btn {
-                padding: 10px;
-                border: 1px solid #2a2a2a;
-                background: #0a0a0a;
-                color: #fff;
-                border-radius: 10px;
-                cursor: pointer;
-                font-size: 12px;
-                transition: all 0.2s;
-            }
-            
-            .quality-btn.active {
-                background: #667eea;
-                border-color: #667eea;
-            }
-            
-            /* FPS Slider */
-            .fps-control {
-                margin-top: 16px;
-            }
-            
-            .fps-slider {
-                width: 100%;
-                height: 4px;
-                -webkit-appearance: none;
-                background: #2a2a2a;
-                border-radius: 2px;
-                margin: 10px 0;
-            }
-            
-            .fps-slider::-webkit-slider-thumb {
-                -webkit-appearance: none;
-                width: 16px;
-                height: 16px;
-                background: #667eea;
-                border-radius: 50%;
-                cursor: pointer;
-            }
-            
-            .fps-value {
-                text-align: center;
-                font-size: 12px;
-                color: #888;
-            }
-            
-            /* Device List */
-            .devices {
-                background: #1a1a1a;
-                border-radius: 16px;
-                padding: 16px;
-                border: 1px solid #2a2a2a;
-            }
-            
-            .device-item {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                padding: 10px 0;
-                border-bottom: 1px solid #2a2a2a;
-            }
-            
-            .device-item:last-child {
-                border-bottom: none;
-            }
-            
-            .device-name {
-                font-size: 14px;
-                font-weight: 500;
-            }
-            
-            .device-status {
-                width: 8px;
-                height: 8px;
-                background: #4CAF50;
-                border-radius: 50%;
-            }
-            
-            .empty-devices {
-                text-align: center;
-                color: #555;
-                padding: 20px;
-            }
+            .devices { background: #1a1a1a; border-radius: 16px; padding: 16px; border: 1px solid #2a2a2a; }
+            .device-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #2a2a2a; }
+            .device-item:last-child { border-bottom: none; }
+            .device-name { font-size: 14px; font-weight: 500; }
+            .device-status { width: 8px; height: 8px; background: #4CAF50; border-radius: 50%; }
+            .empty-devices { text-align: center; color: #555; padding: 20px; }
         </style>
     </head>
     <body>
@@ -480,7 +282,6 @@ app.get('/', (req, res) => {
             let lastFpsUpdate = Date.now();
             let isStreaming = false;
             
-            // DOM Elements
             const video = document.getElementById('video');
             const placeholder = document.getElementById('placeholder');
             const deviceCountSpan = document.getElementById('deviceCount');
@@ -489,12 +290,8 @@ app.get('/', (req, res) => {
             const fpsSlider = document.getElementById('fpsSlider');
             const fpsLabel = document.getElementById('fpsLabel');
             
-            // ========== SOCKET EVENTS ==========
-            
             socket.on('connect', () => {
                 console.log('Connected to server');
-                document.getElementById('serverStatus').innerHTML = '● Online';
-                document.getElementById('serverStatus').style.color = '#4CAF50';
             });
             
             socket.on('frame', (data) => {
@@ -514,6 +311,7 @@ app.get('/', (req, res) => {
             });
             
             socket.on('devices_list', (devices) => {
+                console.log('Devices list received:', devices.length);
                 deviceCountSpan.textContent = devices.length;
                 
                 if (devices.length === 0) {
@@ -522,12 +320,9 @@ app.get('/', (req, res) => {
                     placeholder.style.display = 'block';
                     isStreaming = false;
                 } else {
-                    devicesList.innerHTML = devices.map(device => `
-                        <div class="device-item">
-                            <span class="device-name">📱 ${device.name}</span>
-                            <div class="device-status"></div>
-                        </div>
-                    `).join('');
+                    devicesList.innerHTML = devices.map(device => 
+                        '<div class="device-item"><span class="device-name">📱 ' + device.name + '</span><div class="device-status"></div></div>'
+                    ).join('');
                 }
             });
             
@@ -542,14 +337,11 @@ app.get('/', (req, res) => {
                 }
             });
             
-            // ========== COMMAND FUNCTIONS ==========
-            
             function sendCommand(command, value = null) {
                 socket.emit('command', { command, value });
                 console.log('Command:', command, value);
             }
             
-            // Button Handlers
             document.getElementById('startBtn').onclick = () => {
                 sendCommand('start');
                 isStreaming = true;
@@ -563,7 +355,6 @@ app.get('/', (req, res) => {
             };
             document.getElementById('flipBtn').onclick = () => sendCommand('flip');
             
-            // Quality Buttons
             document.querySelectorAll('.quality-btn').forEach(btn => {
                 btn.onclick = () => {
                     document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
@@ -573,7 +364,6 @@ app.get('/', (req, res) => {
                 };
             });
             
-            // FPS Slider
             fpsSlider.oninput = () => {
                 const fps = parseInt(fpsSlider.value);
                 fpsLabel.textContent = fps + ' FPS';
@@ -585,7 +375,6 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -597,7 +386,6 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Start server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log('');
@@ -607,14 +395,6 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`🌐 Web Interface: http://localhost:${PORT}`);
   console.log(`💪 Health Check: http://localhost:${PORT}/health`);
   console.log('═══════════════════════════════════════════════════');
-  console.log('');
-  console.log('📱 Features:');
-  console.log('   • START / STOP - Control streaming');
-  console.log('   • FLIP - Front/Back camera');
-  console.log('   • 4 Qualities: 120p, 140p, 240p, 360p');
-  console.log('   • FPS Control: 5-30 FPS');
-  console.log('   • Multi-device support');
-  console.log('   • 15 FPS default for low data usage');
   console.log('');
   console.log('📡 Waiting for Android device...');
   console.log('');
