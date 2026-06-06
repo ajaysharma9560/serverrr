@@ -18,12 +18,6 @@ app.use(express.json({ limit: '50mb' }));
 // Store data
 let latestFrame = null;
 let connectedDevices = [];
-let currentSettings = {
-  fps: 15,
-  resolution: "320x240",
-  quality: 70,
-  flip: false
-};
 
 // Socket.IO Connection
 io.on('connection', (socket) => {
@@ -39,6 +33,11 @@ io.on('connection', (socket) => {
     connectedDevices.push(device);
     console.log(`✅ Device registered: ${device.name}`);
     io.emit('devices_list', connectedDevices);
+    
+    // Send test command to verify communication
+    setTimeout(() => {
+      socket.emit('command', { command: 'ping', value: 'Connection established' });
+    }, 1000);
   });
   
   socket.on('stream_frame', (data) => {
@@ -48,15 +47,28 @@ io.on('connection', (socket) => {
     }
   });
   
+  // Handle commands from web
   socket.on('command', (data) => {
-    console.log('📡 Command:', data.command, data.value || '');
-    io.emit('command', data);
+    console.log('📡 Command received from web:', data.command, data.value || '');
+    
+    // Broadcast to ALL connected Android devices
+    if (connectedDevices.length > 0) {
+      connectedDevices.forEach(device => {
+        io.to(device.id).emit('command', {
+          command: data.command,
+          value: data.value
+        });
+      });
+      console.log(`✅ Command sent to ${connectedDevices.length} device(s)`);
+    } else {
+      console.log('⚠️ No devices connected to send command');
+    }
   });
   
   socket.on('disconnect', () => {
     connectedDevices = connectedDevices.filter(d => d.id !== socket.id);
     io.emit('devices_list', connectedDevices);
-    console.log('❌ Disconnected');
+    console.log('❌ Device disconnected, remaining:', connectedDevices.length);
   });
 });
 
@@ -88,7 +100,6 @@ app.get('/', (req, res) => {
                 margin: 0 auto;
             }
             
-            /* Header */
             .header {
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 border-radius: 20px;
@@ -138,14 +149,12 @@ app.get('/', (req, res) => {
                 50% { opacity: 0.5; }
             }
             
-            /* Main Grid */
             .main-grid {
                 display: grid;
                 grid-template-columns: 1fr 320px;
                 gap: 20px;
             }
             
-            /* Video Section */
             .video-section {
                 background: #000;
                 border-radius: 20px;
@@ -179,7 +188,6 @@ app.get('/', (req, res) => {
                 font-size: 12px;
             }
             
-            /* Controls Section */
             .controls-section {
                 background: white;
                 border-radius: 20px;
@@ -221,7 +229,6 @@ app.get('/', (req, res) => {
             .btn-flip { background: #2196F3; }
             .btn:hover { transform: translateY(-2px); opacity: 0.9; }
             
-            /* Quality Grid - Only 4 options */
             .quality-grid {
                 display: grid;
                 grid-template-columns: repeat(4, 1fr);
@@ -246,7 +253,6 @@ app.get('/', (req, res) => {
                 border-color: #667eea;
             }
             
-            /* FPS Slider */
             .fps-slider {
                 width: 100%;
                 margin: 10px 0;
@@ -258,7 +264,6 @@ app.get('/', (req, res) => {
                 color: #666;
             }
             
-            /* Device List */
             .devices-section {
                 margin-top: 20px;
                 background: white;
@@ -297,7 +302,6 @@ app.get('/', (req, res) => {
                 color: #4CAF50;
             }
             
-            /* Responsive */
             @media (max-width: 768px) {
                 .main-grid {
                     grid-template-columns: 1fr;
@@ -380,9 +384,7 @@ app.get('/', (req, res) => {
             const socket = io();
             let frameCount = 0;
             let lastFpsUpdate = Date.now();
-            let currentQuality = 240;
             
-            // Get elements
             const videoStream = document.getElementById('videoStream');
             const streamStatus = document.getElementById('streamStatus');
             const deviceCountSpan = document.getElementById('deviceCount');
@@ -392,7 +394,6 @@ app.get('/', (req, res) => {
             const fpsSlider = document.getElementById('fpsSlider');
             const fpsValue = document.getElementById('fpsValue');
             
-            // Socket events
             socket.on('connect', () => {
                 document.getElementById('serverStatus').innerHTML = '● Online';
                 console.log('Connected to server');
@@ -420,26 +421,22 @@ app.get('/', (req, res) => {
                     devicesContainer.innerHTML = '<div style="text-align: center; color: #999;">No devices connected</div>';
                     streamStatus.innerHTML = '🔴 No device';
                     streamStatus.style.background = 'rgba(0,0,0,0.8)';
-                    videoStream.style.display = 'none';
                 } else {
                     devicesContainer.innerHTML = devices.map(device => 
                         '<div class="device-item"><div class="device-name">📱 ' + device.name + '</div><div class="device-status">● Online</div></div>'
                     ).join('');
                     streamStatus.innerHTML = '🟡 Device ready';
                     streamStatus.style.background = 'rgba(255,152,0,0.9)';
-                    videoStream.style.display = 'block';
                 }
             });
             
-            // Send command function
             function sendCommand(command, value = null) {
                 const data = { command };
                 if (value !== null) data.value = value;
                 socket.emit('command', data);
-                console.log('Command sent:', command, value);
+                console.log('Command sent to server:', command, value);
             }
             
-            // Button events
             document.getElementById('startBtn').onclick = () => {
                 sendCommand('start');
                 streamStatus.innerHTML = '🟢 STARTING...';
@@ -448,7 +445,6 @@ app.get('/', (req, res) => {
             document.getElementById('stopBtn').onclick = () => {
                 sendCommand('stop');
                 streamStatus.innerHTML = '🔴 STOPPED';
-                streamStatus.style.background = 'rgba(0,0,0,0.8)';
             };
             
             document.getElementById('flipBtn').onclick = () => {
@@ -456,27 +452,21 @@ app.get('/', (req, res) => {
                 console.log('Flip command sent');
             };
             
-            // Quality buttons - Only 4 options
             document.querySelectorAll('.quality-btn').forEach(btn => {
                 btn.onclick = () => {
                     document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
                     btn.classList.add('active');
                     const quality = parseInt(btn.dataset.quality);
-                    currentQuality = quality;
                     qualityDisplay.textContent = quality + 'p';
                     sendCommand('quality', quality);
                 };
             });
             
-            // FPS slider
             fpsSlider.oninput = () => {
                 const fps = parseInt(fpsSlider.value);
                 fpsValue.textContent = fps + ' FPS (Lower saves data)';
                 sendCommand('fps', fps);
             };
-            
-            // Make sure stream is visible
-            videoStream.style.display = 'block';
         </script>
     </body>
     </html>
@@ -499,17 +489,10 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('═══════════════════════════════════════════════════');
   console.log('✅ Ludoo Camera Controller Server Started');
   console.log('═══════════════════════════════════════════════════');
-  console.log(`🌐 Web Interface: http://localhost:${PORT}`);
-  console.log(`💪 Health Check: http://localhost:${PORT}/health`);
+  console.log(`🌐 Web Interface: http://0.0.0.0:${PORT}`);
+  console.log(`💪 Health Check: http://0.0.0.0:${PORT}/health`);
   console.log('═══════════════════════════════════════════════════');
   console.log('');
-  console.log('📱 Features:');
-  console.log('   • 4 Quality Options: 120p | 140p | 240p | 360p');
-  console.log('   • Flip Camera');
-  console.log('   • FPS Control (5-30 FPS)');
-  console.log('   • Start/Stop Controls');
-  console.log('   • Live Stream Display');
-  console.log('');
-  console.log('📡 Waiting for Android device...');
+  console.log('📱 Waiting for Android device...');
   console.log('');
 });
