@@ -23,6 +23,7 @@ let connectedDevices = [];
 let activeStream = false;
 let currentQuality = 240;
 let currentFps = 15;
+let selectedDeviceId = null;
 
 io.on('connection', (socket) => {
   console.log('📱 New connection:', socket.id);
@@ -36,10 +37,10 @@ io.on('connection', (socket) => {
       model: data.model || "Unknown",
       camera: data.camera || "back",
       status: 'online',
-      connectedAt: new Date().toLocaleTimeString()
+      connectedAt: new Date().toLocaleTimeString(),
+      cameraPermission: data.cameraPermission || false
     };
     
-    // Check if already exists
     const existingIndex = connectedDevices.findIndex(d => d.id === socket.id);
     if (existingIndex >= 0) {
       connectedDevices[existingIndex] = device;
@@ -47,30 +48,34 @@ io.on('connection', (socket) => {
       connectedDevices.push(device);
     }
     
+    if (!selectedDeviceId) {
+      selectedDeviceId = socket.id;
+    }
+    
     console.log(`✅ Device registered: ${device.name}`);
     console.log(`📊 Total devices: ${connectedDevices.length}`);
+    console.log(`📷 Camera Permission: ${device.cameraPermission ? 'GRANTED' : 'NOT GRANTED'}`);
     
-    // ✅ IMPORTANT: Broadcast to ALL web clients
     io.emit('devices_list', connectedDevices);
+    io.emit('selected_device', selectedDeviceId);
     
-    // Send current settings to device
     socket.emit('settings', {
       quality: currentQuality,
       fps: currentFps,
       stream: activeStream
     });
     
-    // Update status for web
     io.emit('status_update', {
       devices: connectedDevices.length,
       stream: activeStream,
       quality: currentQuality,
-      fps: currentFps
+      fps: currentFps,
+      selectedDevice: selectedDeviceId
     });
   });
   
   socket.on('stream_frame', (data) => {
-    if (data && data.image && activeStream) {
+    if (data && data.image && activeStream && selectedDeviceId === socket.id) {
       io.emit('frame', {
         image: data.image,
         timestamp: Date.now(),
@@ -80,16 +85,41 @@ io.on('connection', (socket) => {
     }
   });
   
+  socket.on('select_device', (data) => {
+    const deviceId = data.deviceId;
+    const device = connectedDevices.find(d => d.id === deviceId);
+    if (device) {
+      selectedDeviceId = deviceId;
+      console.log(`🖱️ Selected device: ${device.name}`);
+      io.emit('selected_device', selectedDeviceId);
+      io.emit('status_update', {
+        devices: connectedDevices.length,
+        stream: activeStream,
+        quality: currentQuality,
+        fps: currentFps,
+        selectedDevice: selectedDeviceId
+      });
+    }
+  });
+  
   socket.on('disconnect', () => {
     console.log('❌ Device disconnected:', socket.id);
     connectedDevices = connectedDevices.filter(d => d.id !== socket.id);
-    // ✅ Broadcast updated list
+    
+    if (selectedDeviceId === socket.id && connectedDevices.length > 0) {
+      selectedDeviceId = connectedDevices[0].id;
+      io.emit('selected_device', selectedDeviceId);
+    } else if (connectedDevices.length === 0) {
+      selectedDeviceId = null;
+    }
+    
     io.emit('devices_list', connectedDevices);
     io.emit('status_update', {
       devices: connectedDevices.length,
       stream: activeStream,
       quality: currentQuality,
-      fps: currentFps
+      fps: currentFps,
+      selectedDevice: selectedDeviceId
     });
     console.log(`📊 Remaining devices: ${connectedDevices.length}`);
   });
@@ -100,7 +130,6 @@ io.on('connection', (socket) => {
     const { command, value } = data;
     console.log(`🎮 Command: ${command} ${value ? '= ' + value : ''}`);
     
-    // Update local state
     switch(command) {
       case 'start':
         activeStream = true;
@@ -123,29 +152,27 @@ io.on('connection', (socket) => {
         break;
     }
     
-    // Forward to all Android devices
-    connectedDevices.forEach(device => {
-      io.to(device.id).emit('command', { command, value });
-    });
+    if (selectedDeviceId) {
+      io.to(selectedDeviceId).emit('command', { command, value });
+    }
     
-    // Update web panel status
     io.emit('status_update', {
       devices: connectedDevices.length,
       stream: activeStream,
       quality: currentQuality,
-      fps: currentFps
+      fps: currentFps,
+      selectedDevice: selectedDeviceId
     });
   });
   
-  // ========== SEND INITIAL DATA TO WEB CLIENT ==========
-  
-  // ✅ Send current device list to new web client
   socket.emit('devices_list', connectedDevices);
+  socket.emit('selected_device', selectedDeviceId);
   socket.emit('status_update', {
     devices: connectedDevices.length,
     stream: activeStream,
     quality: currentQuality,
-    fps: currentFps
+    fps: currentFps,
+    selectedDevice: selectedDeviceId
   });
 });
 
@@ -172,6 +199,7 @@ app.get('/', (req, res) => {
             .header { text-align: center; margin-bottom: 20px; }
             .header h1 { font-size: 24px; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
             .header p { font-size: 12px; color: #666; margin-top: 5px; }
+            #selectedDeviceLabel { font-size: 12px; color: #4CAF50; margin-top: 5px; }
             
             .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
             .stat-card { background: #1a1a1a; border-radius: 12px; padding: 12px; text-align: center; border: 1px solid #2a2a2a; }
@@ -181,10 +209,58 @@ app.get('/', (req, res) => {
             .stat-value.streaming { color: #f44336; animation: pulse 1s infinite; }
             @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
             
-            .video-container { background: #000; border-radius: 16px; overflow: hidden; aspect-ratio: 16 / 9; margin-bottom: 20px; border: 1px solid #2a2a2a; display: flex; align-items: center; justify-content: center; }
+            .video-container { 
+                background: #000; 
+                border-radius: 16px; 
+                overflow: hidden; 
+                aspect-ratio: 16 / 9; 
+                margin-bottom: 20px; 
+                border: 1px solid #2a2a2a; 
+                display: flex; 
+                align-items: center; 
+                justify-content: center;
+                position: relative;
+            }
             #video { width: 100%; height: 100%; object-fit: cover; }
             .video-placeholder { text-align: center; color: #555; }
             .video-placeholder span { font-size: 48px; }
+            
+            /* ✅ Fullscreen Button */
+            .fullscreen-btn {
+                position: absolute;
+                bottom: 10px;
+                right: 10px;
+                background: rgba(0,0,0,0.6);
+                border: none;
+                color: white;
+                font-size: 20px;
+                width: 36px;
+                height: 36px;
+                border-radius: 50%;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 10;
+                transition: all 0.3s;
+            }
+            .fullscreen-btn:hover { background: #667eea; }
+            
+            .video-container.fullscreen {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                z-index: 9999;
+                margin: 0;
+                border-radius: 0;
+                aspect-ratio: auto;
+            }
+            .video-container.fullscreen .fullscreen-btn {
+                bottom: 20px;
+                right: 20px;
+            }
             
             .controls { background: #1a1a1a; border-radius: 16px; padding: 16px; margin-bottom: 20px; border: 1px solid #2a2a2a; }
             .section-title { font-size: 12px; color: #888; margin-bottom: 12px; letter-spacing: 1px; }
@@ -206,11 +282,38 @@ app.get('/', (req, res) => {
             .fps-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: #667eea; border-radius: 50%; cursor: pointer; }
             .fps-value { text-align: center; font-size: 12px; color: #888; }
             
+            /* ✅ Clickable Device List */
             .devices { background: #1a1a1a; border-radius: 16px; padding: 16px; border: 1px solid #2a2a2a; }
-            .device-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #2a2a2a; }
+            .device-item { 
+                display: flex; 
+                justify-content: space-between; 
+                align-items: center; 
+                padding: 12px 0; 
+                border-bottom: 1px solid #2a2a2a;
+                cursor: pointer;
+                transition: all 0.2s;
+            }
+            .device-item:hover { 
+                background: #252525; 
+                padding-left: 8px; 
+                border-radius: 8px; 
+            }
+            .device-item.active { 
+                background: linear-gradient(135deg, #667eea20, #764ba220); 
+                border-left: 3px solid #667eea; 
+                padding-left: 8px; 
+                border-radius: 8px; 
+            }
             .device-item:last-child { border-bottom: none; }
             .device-name { font-size: 14px; font-weight: 500; }
             .device-status { width: 8px; height: 8px; background: #4CAF50; border-radius: 50%; }
+            .device-badge {
+                font-size: 10px;
+                background: #667eea;
+                padding: 2px 8px;
+                border-radius: 12px;
+                margin-left: 8px;
+            }
             .empty-devices { text-align: center; color: #555; padding: 20px; }
         </style>
     </head>
@@ -218,7 +321,7 @@ app.get('/', (req, res) => {
         <div class="container">
             <div class="header">
                 <h1>📹 Ludoo Remote</h1>
-                <p>15 FPS | Low Data Streaming</p>
+                <p id="selectedDeviceLabel">Select a device to view</p>
             </div>
             
             <div class="stats">
@@ -236,12 +339,13 @@ app.get('/', (req, res) => {
                 </div>
             </div>
             
-            <div class="video-container">
+            <div class="video-container" id="videoContainer">
                 <img id="video" style="display: none;">
                 <div id="placeholder" class="video-placeholder">
                     <span>📷</span><br>
                     No stream
                 </div>
+                <button class="fullscreen-btn" id="fullscreenBtn">⛶</button>
             </div>
             
             <div class="controls">
@@ -268,7 +372,7 @@ app.get('/', (req, res) => {
             </div>
             
             <div class="devices">
-                <div class="section-title">📱 CONNECTED DEVICES</div>
+                <div class="section-title">📱 CONNECTED DEVICES (Click to view)</div>
                 <div id="devicesList">
                     <div class="empty-devices">No devices connected</div>
                 </div>
@@ -281,6 +385,8 @@ app.get('/', (req, res) => {
             let frameCount = 0;
             let lastFpsUpdate = Date.now();
             let isStreaming = false;
+            let selectedDeviceId = null;
+            let devicesData = [];
             
             const video = document.getElementById('video');
             const placeholder = document.getElementById('placeholder');
@@ -289,6 +395,26 @@ app.get('/', (req, res) => {
             const devicesList = document.getElementById('devicesList');
             const fpsSlider = document.getElementById('fpsSlider');
             const fpsLabel = document.getElementById('fpsLabel');
+            const selectedDeviceLabel = document.getElementById('selectedDeviceLabel');
+            const videoContainer = document.getElementById('videoContainer');
+            const fullscreenBtn = document.getElementById('fullscreenBtn');
+            
+            // ✅ Fullscreen
+            fullscreenBtn.addEventListener('click', () => {
+                if (!document.fullscreenElement) {
+                    videoContainer.requestFullscreen().catch(err => console.log(err));
+                } else {
+                    document.exitFullscreen();
+                }
+            });
+            
+            document.addEventListener('fullscreenchange', () => {
+                if (document.fullscreenElement) {
+                    videoContainer.classList.add('fullscreen');
+                } else {
+                    videoContainer.classList.remove('fullscreen');
+                }
+            });
             
             socket.on('connect', () => {
                 console.log('Connected to server');
@@ -311,7 +437,7 @@ app.get('/', (req, res) => {
             });
             
             socket.on('devices_list', (devices) => {
-                console.log('Devices list received:', devices.length);
+                devicesData = devices;
                 deviceCountSpan.textContent = devices.length;
                 
                 if (devices.length === 0) {
@@ -319,25 +445,60 @@ app.get('/', (req, res) => {
                     video.style.display = 'none';
                     placeholder.style.display = 'block';
                     isStreaming = false;
+                    selectedDeviceLabel.innerHTML = 'Select a device to view';
                 } else {
                     devicesList.innerHTML = devices.map(device => 
-                        '<div class="device-item"><span class="device-name">📱 ' + device.name + '</span><div class="device-status"></div></div>'
+                        '<div class="device-item ' + (selectedDeviceId === device.id ? 'active' : '') + '" onclick="selectDevice(\'' + device.id + '\')">' +
+                            '<div>' +
+                                '<span class="device-name">📱 ' + device.name + '</span>' +
+                                (selectedDeviceId === device.id ? '<span class="device-badge">VIEWING</span>' : '') +
+                            '</div>' +
+                            '<div class="device-status"></div>' +
+                        '</div>'
                     ).join('');
                 }
             });
             
+            socket.on('selected_device', (deviceId) => {
+                selectedDeviceId = deviceId;
+                const device = devicesData.find(d => d.id === deviceId);
+                if (device) {
+                    selectedDeviceLabel.innerHTML = 'Viewing: ' + device.name;
+                }
+                
+                document.querySelectorAll('.device-item').forEach(el => {
+                    el.classList.remove('active');
+                });
+                const activeEl = document.querySelector('.device-item[onclick="selectDevice(\'' + deviceId + '\')"]');
+                if (activeEl) activeEl.classList.add('active');
+            });
+            
             socket.on('status_update', (status) => {
                 isStreaming = status.stream;
+                const serverStatus = document.getElementById('serverStatus');
                 if (status.stream) {
-                    document.getElementById('serverStatus').innerHTML = '● LIVE';
-                    document.getElementById('serverStatus').style.color = '#f44336';
+                    serverStatus.innerHTML = '● LIVE';
+                    serverStatus.style.color = '#f44336';
                 } else {
-                    document.getElementById('serverStatus').innerHTML = '● Online';
-                    document.getElementById('serverStatus').style.color = '#4CAF50';
+                    serverStatus.innerHTML = '● Online';
+                    serverStatus.style.color = '#4CAF50';
                 }
             });
             
+            window.selectDevice = function(deviceId) {
+                console.log('Selecting device:', deviceId);
+                socket.emit('select_device', { deviceId: deviceId });
+                isStreaming = false;
+                video.style.display = 'none';
+                placeholder.style.display = 'block';
+                fpsCountSpan.textContent = '0';
+            };
+            
             function sendCommand(command, value = null) {
+                if (!selectedDeviceId) {
+                    console.log('No device selected');
+                    return;
+                }
                 socket.emit('command', { command, value });
                 console.log('Command:', command, value);
             }
@@ -382,6 +543,7 @@ app.get('/health', (req, res) => {
     streamActive: activeStream,
     quality: currentQuality,
     fps: currentFps,
+    selectedDevice: selectedDeviceId,
     uptime: process.uptime()
   });
 });
@@ -395,6 +557,12 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`🌐 Web Interface: http://localhost:${PORT}`);
   console.log(`💪 Health Check: http://localhost:${PORT}/health`);
   console.log('═══════════════════════════════════════════════════');
+  console.log('');
+  console.log('📱 Features:');
+  console.log('   • Fullscreen button on video');
+  console.log('   • Click on device to view/control');
+  console.log('   • Multi-device support');
+  console.log('   • Device shows ONLINE immediately');
   console.log('');
   console.log('📡 Waiting for Android device...');
   console.log('');
