@@ -37,8 +37,7 @@ io.on('connection', (socket) => {
       model: data.model || "Unknown",
       camera: data.camera || "back",
       status: 'online',
-      connectedAt: new Date().toLocaleTimeString(),
-      cameraPermission: data.cameraPermission || false
+      connectedAt: new Date().toLocaleTimeString()
     };
     
     const existingIndex = connectedDevices.findIndex(d => d.id === socket.id);
@@ -54,7 +53,6 @@ io.on('connection', (socket) => {
     
     console.log(`✅ Device registered: ${device.name}`);
     console.log(`📊 Total devices: ${connectedDevices.length}`);
-    console.log(`📷 Camera Permission: ${device.cameraPermission ? 'GRANTED' : 'NOT GRANTED'}`);
     
     io.emit('devices_list', connectedDevices);
     io.emit('selected_device', selectedDeviceId);
@@ -187,55 +185,141 @@ app.get('/', (req, res) => {
         <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
         <title>Ludoo Camera Remote</title>
         <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            
             body {
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: #0a0a0a;
+                background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%);
                 min-height: 100vh;
                 padding: 20px;
                 color: #fff;
             }
-            .container { max-width: 600px; margin: 0 auto; }
-            .header { text-align: center; margin-bottom: 20px; }
-            .header h1 { font-size: 24px; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-            .header p { font-size: 12px; color: #666; margin-top: 5px; }
-            #selectedDeviceLabel { font-size: 12px; color: #4CAF50; margin-top: 5px; }
             
-            .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
-            .stat-card { background: #1a1a1a; border-radius: 12px; padding: 12px; text-align: center; border: 1px solid #2a2a2a; }
-            .stat-label { font-size: 11px; color: #888; margin-bottom: 5px; }
-            .stat-value { font-size: 20px; font-weight: 700; }
-            .stat-value.online { color: #4CAF50; }
-            .stat-value.streaming { color: #f44336; animation: pulse 1s infinite; }
-            @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
-            
-            .video-container { 
-                background: #000; 
-                border-radius: 16px; 
-                overflow: hidden; 
-                aspect-ratio: 16 / 9; 
-                margin-bottom: 20px; 
-                border: 1px solid #2a2a2a; 
-                display: flex; 
-                align-items: center; 
-                justify-content: center;
-                position: relative;
+            .container {
+                max-width: 600px;
+                margin: 0 auto;
             }
-            #video { width: 100%; height: 100%; object-fit: cover; }
-            .video-placeholder { text-align: center; color: #555; }
-            .video-placeholder span { font-size: 48px; }
             
-            /* ✅ Fullscreen Button */
+            /* Header */
+            .header {
+                text-align: center;
+                margin-bottom: 20px;
+            }
+            
+            .header h1 {
+                font-size: 28px;
+                background: linear-gradient(135deg, #667eea, #764ba2, #f093fb);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+            }
+            
+            .header p {
+                font-size: 12px;
+                color: #888;
+                margin-top: 5px;
+            }
+            
+            /* Stats Cards */
+            .stats {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 12px;
+                margin-bottom: 20px;
+            }
+            
+            .stat-card {
+                background: rgba(26, 26, 42, 0.8);
+                backdrop-filter: blur(10px);
+                border-radius: 16px;
+                padding: 15px;
+                text-align: center;
+                border: 1px solid rgba(102, 126, 234, 0.3);
+                transition: transform 0.3s;
+            }
+            
+            .stat-card:hover {
+                transform: translateY(-2px);
+                border-color: #667eea;
+            }
+            
+            .stat-label {
+                font-size: 11px;
+                color: #888;
+                margin-bottom: 5px;
+                letter-spacing: 1px;
+            }
+            
+            .stat-value {
+                font-size: 24px;
+                font-weight: 700;
+            }
+            
+            .stat-value.online {
+                color: #4CAF50;
+            }
+            
+            .stat-value.streaming {
+                color: #f44336;
+                animation: pulse 1s infinite;
+            }
+            
+            @keyframes pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.6; }
+            }
+            
+            /* Video Container */
+            .video-container {
+                background: #000;
+                border-radius: 20px;
+                overflow: hidden;
+                aspect-ratio: 16 / 9;
+                margin-bottom: 20px;
+                border: 2px solid rgba(102, 126, 234, 0.5);
+                position: relative;
+                transition: all 0.3s;
+            }
+            
+            .video-container:hover {
+                border-color: #667eea;
+            }
+            
+            #video {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            }
+            
+            .video-placeholder {
+                text-align: center;
+                color: #555;
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+            }
+            
+            .video-placeholder span {
+                font-size: 48px;
+            }
+            
+            /* Fullscreen Button */
             .fullscreen-btn {
                 position: absolute;
-                bottom: 10px;
-                right: 10px;
-                background: rgba(0,0,0,0.6);
+                bottom: 15px;
+                right: 15px;
+                background: rgba(0,0,0,0.7);
+                backdrop-filter: blur(5px);
                 border: none;
                 color: white;
                 font-size: 20px;
-                width: 36px;
-                height: 36px;
+                width: 40px;
+                height: 40px;
                 border-radius: 50%;
                 cursor: pointer;
                 display: flex;
@@ -244,7 +328,11 @@ app.get('/', (req, res) => {
                 z-index: 10;
                 transition: all 0.3s;
             }
-            .fullscreen-btn:hover { background: #667eea; }
+            
+            .fullscreen-btn:hover {
+                background: #667eea;
+                transform: scale(1.05);
+            }
             
             .video-container.fullscreen {
                 position: fixed;
@@ -257,71 +345,295 @@ app.get('/', (req, res) => {
                 border-radius: 0;
                 aspect-ratio: auto;
             }
+            
             .video-container.fullscreen .fullscreen-btn {
-                bottom: 20px;
-                right: 20px;
+                bottom: 25px;
+                right: 25px;
             }
             
-            .controls { background: #1a1a1a; border-radius: 16px; padding: 16px; margin-bottom: 20px; border: 1px solid #2a2a2a; }
-            .section-title { font-size: 12px; color: #888; margin-bottom: 12px; letter-spacing: 1px; }
-            .button-group { display: flex; gap: 12px; margin-bottom: 20px; }
-            .btn { flex: 1; padding: 12px; border: none; border-radius: 12px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
-            .btn-start { background: #4CAF50; color: white; }
-            .btn-start:hover { background: #45a049; }
-            .btn-stop { background: #f44336; color: white; }
-            .btn-stop:hover { background: #da190b; }
-            .btn-flip { background: #2196F3; color: white; }
-            .btn-flip:hover { background: #0b7dda; }
+            /* Controls Section */
+            .controls {
+                background: rgba(26, 26, 42, 0.8);
+                backdrop-filter: blur(10px);
+                border-radius: 20px;
+                padding: 20px;
+                margin-bottom: 20px;
+                border: 1px solid rgba(102, 126, 234, 0.3);
+            }
             
-            .quality-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 20px; }
-            .quality-btn { padding: 10px; border: 1px solid #2a2a2a; background: #0a0a0a; color: #fff; border-radius: 10px; cursor: pointer; font-size: 12px; text-align: center; }
-            .quality-btn.active { background: #667eea; border-color: #667eea; }
+            .section-title {
+                font-size: 12px;
+                color: #888;
+                margin-bottom: 12px;
+                letter-spacing: 1px;
+            }
             
-            .fps-control { margin-top: 16px; }
-            .fps-slider { width: 100%; height: 4px; -webkit-appearance: none; background: #2a2a2a; border-radius: 2px; margin: 10px 0; }
-            .fps-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: #667eea; border-radius: 50%; cursor: pointer; }
-            .fps-value { text-align: center; font-size: 12px; color: #888; }
+            .button-group {
+                display: flex;
+                gap: 12px;
+                margin-bottom: 20px;
+            }
             
-            /* ✅ Clickable Device List */
-            .devices { background: #1a1a1a; border-radius: 16px; padding: 16px; border: 1px solid #2a2a2a; }
-            .device-item { 
-                display: flex; 
-                justify-content: space-between; 
-                align-items: center; 
-                padding: 12px 0; 
-                border-bottom: 1px solid #2a2a2a;
+            .btn {
+                flex: 1;
+                padding: 12px;
+                border: none;
+                border-radius: 12px;
+                font-size: 14px;
+                font-weight: 600;
                 cursor: pointer;
-                transition: all 0.2s;
+                transition: all 0.3s;
             }
-            .device-item:hover { 
-                background: #252525; 
-                padding-left: 8px; 
-                border-radius: 8px; 
+            
+            .btn-start {
+                background: linear-gradient(135deg, #4CAF50, #45a049);
+                color: white;
             }
-            .device-item.active { 
-                background: linear-gradient(135deg, #667eea20, #764ba220); 
-                border-left: 3px solid #667eea; 
-                padding-left: 8px; 
-                border-radius: 8px; 
+            
+            .btn-start:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 5px 20px rgba(76, 175, 80, 0.4);
             }
-            .device-item:last-child { border-bottom: none; }
-            .device-name { font-size: 14px; font-weight: 500; }
-            .device-status { width: 8px; height: 8px; background: #4CAF50; border-radius: 50%; }
-            .device-badge {
+            
+            .btn-stop {
+                background: linear-gradient(135deg, #f44336, #da190b);
+                color: white;
+            }
+            
+            .btn-stop:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 5px 20px rgba(244, 67, 54, 0.4);
+            }
+            
+            .btn-flip {
+                background: linear-gradient(135deg, #2196F3, #0b7dda);
+                color: white;
+            }
+            
+            .btn-flip:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 5px 20px rgba(33, 150, 243, 0.4);
+            }
+            
+            /* Quality Grid */
+            .quality-grid {
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 8px;
+                margin-bottom: 20px;
+            }
+            
+            .quality-btn {
+                padding: 10px;
+                border: 1px solid rgba(102, 126, 234, 0.3);
+                background: rgba(10, 10, 10, 0.6);
+                color: #fff;
+                border-radius: 10px;
+                cursor: pointer;
+                font-size: 12px;
+                text-align: center;
+                transition: all 0.3s;
+            }
+            
+            .quality-btn:hover {
+                border-color: #667eea;
+                transform: translateY(-2px);
+            }
+            
+            .quality-btn.active {
+                background: linear-gradient(135deg, #667eea, #764ba2);
+                border-color: #667eea;
+            }
+            
+            /* FPS Control */
+            .fps-control {
+                margin-top: 16px;
+            }
+            
+            .fps-slider {
+                width: 100%;
+                height: 4px;
+                -webkit-appearance: none;
+                background: #2a2a2a;
+                border-radius: 2px;
+                margin: 10px 0;
+            }
+            
+            .fps-slider::-webkit-slider-thumb {
+                -webkit-appearance: none;
+                width: 18px;
+                height: 18px;
+                background: #667eea;
+                border-radius: 50%;
+                cursor: pointer;
+                transition: all 0.3s;
+            }
+            
+            .fps-slider::-webkit-slider-thumb:hover {
+                transform: scale(1.2);
+            }
+            
+            .fps-value {
+                text-align: center;
+                font-size: 12px;
+                color: #888;
+            }
+            
+            /* Device Panel */
+            .devices {
+                background: rgba(26, 26, 42, 0.8);
+                backdrop-filter: blur(10px);
+                border-radius: 20px;
+                padding: 20px;
+                border: 1px solid rgba(102, 126, 234, 0.3);
+            }
+            
+            .device-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 15px;
+            }
+            
+            .device-header h3 {
+                font-size: 14px;
+                color: #888;
+                letter-spacing: 1px;
+            }
+            
+            .device-count {
+                background: rgba(102, 126, 234, 0.3);
+                padding: 4px 10px;
+                border-radius: 20px;
+                font-size: 11px;
+                color: #667eea;
+            }
+            
+            .devices-list {
+                max-height: 250px;
+                overflow-y: auto;
+            }
+            
+            .device-item {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 12px;
+                margin-bottom: 8px;
+                background: rgba(10, 10, 10, 0.5);
+                border-radius: 12px;
+                cursor: pointer;
+                transition: all 0.3s;
+                border: 1px solid transparent;
+            }
+            
+            .device-item:hover {
+                background: rgba(102, 126, 234, 0.2);
+                transform: translateX(5px);
+                border-color: #667eea;
+            }
+            
+            .device-item.active {
+                background: linear-gradient(135deg, rgba(102, 126, 234, 0.3), rgba(118, 75, 162, 0.3));
+                border-color: #667eea;
+            }
+            
+            .device-info {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            
+            .device-icon {
+                font-size: 24px;
+            }
+            
+            .device-name {
+                font-size: 14px;
+                font-weight: 500;
+            }
+            
+            .device-model {
                 font-size: 10px;
+                color: #888;
+                margin-top: 2px;
+            }
+            
+            .device-status-dot {
+                width: 8px;
+                height: 8px;
+                background: #4CAF50;
+                border-radius: 50%;
+                animation: pulse 1.5s infinite;
+            }
+            
+            .device-badge {
+                font-size: 9px;
                 background: #667eea;
                 padding: 2px 8px;
                 border-radius: 12px;
                 margin-left: 8px;
             }
-            .empty-devices { text-align: center; color: #555; padding: 20px; }
+            
+            .empty-devices {
+                text-align: center;
+                color: #555;
+                padding: 30px;
+            }
+            
+            /* Scrollbar */
+            .devices-list::-webkit-scrollbar {
+                width: 4px;
+            }
+            
+            .devices-list::-webkit-scrollbar-track {
+                background: #1a1a1a;
+                border-radius: 10px;
+            }
+            
+            .devices-list::-webkit-scrollbar-thumb {
+                background: #667eea;
+                border-radius: 10px;
+            }
+            
+            /* Responsive */
+            @media (max-width: 480px) {
+                body {
+                    padding: 12px;
+                }
+                
+                .stats {
+                    gap: 8px;
+                }
+                
+                .stat-card {
+                    padding: 10px;
+                }
+                
+                .stat-value {
+                    font-size: 18px;
+                }
+                
+                .quality-grid {
+                    gap: 6px;
+                }
+                
+                .quality-btn {
+                    padding: 8px;
+                    font-size: 10px;
+                }
+                
+                .device-name {
+                    font-size: 12px;
+                }
+            }
         </style>
     </head>
     <body>
         <div class="container">
             <div class="header">
                 <h1>📹 Ludoo Remote</h1>
-                <p id="selectedDeviceLabel">Select a device to view</p>
+                <p id="selectedDeviceLabel">Click on a device to view stream</p>
             </div>
             
             <div class="stats">
@@ -343,7 +655,7 @@ app.get('/', (req, res) => {
                 <img id="video" style="display: none;">
                 <div id="placeholder" class="video-placeholder">
                     <span>📷</span><br>
-                    No stream
+                    No active stream
                 </div>
                 <button class="fullscreen-btn" id="fullscreenBtn">⛶</button>
             </div>
@@ -372,8 +684,11 @@ app.get('/', (req, res) => {
             </div>
             
             <div class="devices">
-                <div class="section-title">📱 CONNECTED DEVICES (Click to view)</div>
-                <div id="devicesList">
+                <div class="device-header">
+                    <h3>📱 CONNECTED DEVICES</h3>
+                    <div class="device-count" id="deviceCountBadge">0</div>
+                </div>
+                <div class="devices-list" id="devicesList">
                     <div class="empty-devices">No devices connected</div>
                 </div>
             </div>
@@ -388,9 +703,11 @@ app.get('/', (req, res) => {
             let selectedDeviceId = null;
             let devicesData = [];
             
+            // DOM Elements
             const video = document.getElementById('video');
             const placeholder = document.getElementById('placeholder');
             const deviceCountSpan = document.getElementById('deviceCount');
+            const deviceCountBadge = document.getElementById('deviceCountBadge');
             const fpsCountSpan = document.getElementById('fpsCount');
             const devicesList = document.getElementById('devicesList');
             const fpsSlider = document.getElementById('fpsSlider');
@@ -399,7 +716,7 @@ app.get('/', (req, res) => {
             const videoContainer = document.getElementById('videoContainer');
             const fullscreenBtn = document.getElementById('fullscreenBtn');
             
-            // ✅ Fullscreen
+            // Fullscreen Function
             fullscreenBtn.addEventListener('click', () => {
                 if (!document.fullscreenElement) {
                     videoContainer.requestFullscreen().catch(err => console.log(err));
@@ -416,8 +733,9 @@ app.get('/', (req, res) => {
                 }
             });
             
+            // Socket Events
             socket.on('connect', () => {
-                console.log('Connected to server');
+                console.log('✅ Connected to server');
             });
             
             socket.on('frame', (data) => {
@@ -439,23 +757,30 @@ app.get('/', (req, res) => {
             socket.on('devices_list', (devices) => {
                 devicesData = devices;
                 deviceCountSpan.textContent = devices.length;
+                deviceCountBadge.textContent = devices.length;
                 
                 if (devices.length === 0) {
                     devicesList.innerHTML = '<div class="empty-devices">No devices connected</div>';
                     video.style.display = 'none';
                     placeholder.style.display = 'block';
                     isStreaming = false;
-                    selectedDeviceLabel.innerHTML = 'Select a device to view';
+                    selectedDeviceLabel.innerHTML = 'Click on a device to view stream';
                 } else {
-                    devicesList.innerHTML = devices.map(device => 
-                        '<div class="device-item ' + (selectedDeviceId === device.id ? 'active' : '') + '" onclick="selectDevice(\'' + device.id + '\')">' +
-                            '<div>' +
-                                '<span class="device-name">📱 ' + device.name + '</span>' +
-                                (selectedDeviceId === device.id ? '<span class="device-badge">VIEWING</span>' : '') +
-                            '</div>' +
-                            '<div class="device-status"></div>' +
-                        '</div>'
-                    ).join('');
+                    devicesList.innerHTML = devices.map(device => `
+                        <div class="device-item ${selectedDeviceId === device.id ? 'active' : ''}" onclick="selectDevice('${device.id}')">
+                            <div class="device-info">
+                                <span class="device-icon">📱</span>
+                                <div>
+                                    <div class="device-name">${device.name}</div>
+                                    <div class="device-model">${device.model}</div>
+                                </div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <div class="device-status-dot"></div>
+                                ${selectedDeviceId === device.id ? '<span class="device-badge">VIEWING</span>' : ''}
+                            </div>
+                        </div>
+                    `).join('');
                 }
             });
             
@@ -463,13 +788,13 @@ app.get('/', (req, res) => {
                 selectedDeviceId = deviceId;
                 const device = devicesData.find(d => d.id === deviceId);
                 if (device) {
-                    selectedDeviceLabel.innerHTML = 'Viewing: ' + device.name;
+                    selectedDeviceLabel.innerHTML = `Viewing: ${device.name}`;
                 }
                 
                 document.querySelectorAll('.device-item').forEach(el => {
                     el.classList.remove('active');
                 });
-                const activeEl = document.querySelector('.device-item[onclick="selectDevice(\'' + deviceId + '\')"]');
+                const activeEl = document.querySelector(`.device-item[onclick="selectDevice('${deviceId}')"]`);
                 if (activeEl) activeEl.classList.add('active');
             });
             
@@ -479,14 +804,17 @@ app.get('/', (req, res) => {
                 if (status.stream) {
                     serverStatus.innerHTML = '● LIVE';
                     serverStatus.style.color = '#f44336';
+                    serverStatus.classList.add('streaming');
                 } else {
                     serverStatus.innerHTML = '● Online';
                     serverStatus.style.color = '#4CAF50';
+                    serverStatus.classList.remove('streaming');
                 }
             });
             
+            // Select Device Function
             window.selectDevice = function(deviceId) {
-                console.log('Selecting device:', deviceId);
+                console.log('📱 Selecting device:', deviceId);
                 socket.emit('select_device', { deviceId: deviceId });
                 isStreaming = false;
                 video.style.display = 'none';
@@ -494,15 +822,21 @@ app.get('/', (req, res) => {
                 fpsCountSpan.textContent = '0';
             };
             
+            // Send Command Function
             function sendCommand(command, value = null) {
                 if (!selectedDeviceId) {
-                    console.log('No device selected');
+                    console.log('⚠️ No device selected');
+                    selectedDeviceLabel.innerHTML = '⚠️ Please click on a device first!';
+                    setTimeout(() => {
+                        selectedDeviceLabel.innerHTML = 'Click on a device to view stream';
+                    }, 2000);
                     return;
                 }
                 socket.emit('command', { command, value });
-                console.log('Command:', command, value);
+                console.log('🎮 Command sent:', command, value);
             }
             
+            // Button Events
             document.getElementById('startBtn').onclick = () => {
                 sendCommand('start');
                 isStreaming = true;
@@ -516,6 +850,7 @@ app.get('/', (req, res) => {
             };
             document.getElementById('flipBtn').onclick = () => sendCommand('flip');
             
+            // Quality Buttons
             document.querySelectorAll('.quality-btn').forEach(btn => {
                 btn.onclick = () => {
                     document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
@@ -525,11 +860,14 @@ app.get('/', (req, res) => {
                 };
             });
             
+            // FPS Slider
             fpsSlider.oninput = () => {
                 const fps = parseInt(fpsSlider.value);
                 fpsLabel.textContent = fps + ' FPS';
                 sendCommand('fps', fps);
             };
+            
+            console.log('🚀 Page loaded, waiting for devices...');
         </script>
     </body>
     </html>
@@ -560,9 +898,12 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('');
   console.log('📱 Features:');
   console.log('   • Fullscreen button on video');
-  console.log('   • Click on device to view/control');
+  console.log('   • Device panel with click to select');
   console.log('   • Multi-device support');
   console.log('   • Device shows ONLINE immediately');
+  console.log('   • START/STOP/FLIP controls');
+  console.log('   • 4 Quality options: 120p, 140p, 240p, 360p');
+  console.log('   • FPS Control: 5-30 FPS');
   console.log('');
   console.log('📡 Waiting for Android device...');
   console.log('');
