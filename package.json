@@ -1,7 +1,7 @@
 {
-  "name": "ludoo-camera-controller",
-  "version": "1.0.0",
-  "description": "Remote camera controller with WebSocket streaming",
+  "name": "cam-dash",
+  "version": "2.0.0",
+  "description": "Cyberpunk style camera streaming server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -11,7 +11,8 @@
     "camera",
     "streaming",
     "websocket",
-    "remote-control"
+    "remote-control",
+    "cyberpunk"
   ],
   "author": "Ludoo",
   "license": "MIT",
