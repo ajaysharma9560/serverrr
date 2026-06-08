@@ -1,21 +1,12 @@
 {
-  "name": "cam-dash",
-  "version": "2.0.0",
-  "description": "Cyberpunk style camera streaming server",
+  "name": "ludoo-test-server",
+  "version": "1.0.0",
+  "description": "Simple test server for Ludoo Camera",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
-  "keywords": [
-    "camera",
-    "streaming",
-    "websocket",
-    "remote-control",
-    "cyberpunk"
-  ],
-  "author": "Ludoo",
-  "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
     "socket.io": "^4.5.4",
@@ -24,7 +15,7 @@
   "devDependencies": {
     "nodemon": "^3.0.1"
   },
-  "engines": {
-    "node": ">=14.0.0"
-  }
+  "keywords": ["camera", "streaming", "test"],
+  "author": "Ludoo",
+  "license": "MIT"
 }
