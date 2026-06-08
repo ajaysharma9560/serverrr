@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
@@ -18,17 +19,17 @@ const io = socketIo(server, {
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// Store state
+// ========== STORAGE ==========
 let connectedDevices = [];
 let activeStream = false;
 let currentQuality = 240;
 let currentFps = 15;
 
+// ========== SOCKET EVENTS ==========
 io.on('connection', (socket) => {
   console.log('📱 New connection:', socket.id);
   
   // ========== ANDROID DEVICE EVENTS ==========
-  
   socket.on('register_device', (data) => {
     console.log('🔵 REGISTER_DEVICE received:', data);
     
@@ -36,7 +37,6 @@ io.on('connection', (socket) => {
       id: socket.id,
       name: data.deviceName || "Android Device",
       model: data.model || "Unknown",
-      camera: data.camera || "back",
       status: 'online',
       type: data.type || "camera",
       connectedAt: new Date().toLocaleTimeString()
@@ -51,9 +51,8 @@ io.on('connection', (socket) => {
     
     console.log(`✅ Device registered: ${device.name}`);
     console.log(`📊 Total devices: ${connectedDevices.length}`);
-    console.log(`📋 Device list:`, connectedDevices.map(d => d.name));
     
-    // ✅ IMPORTANT: Broadcast to ALL web clients
+    // Broadcast to all web clients
     io.emit('devices_list', connectedDevices);
     
     // Send current settings to device
@@ -97,7 +96,6 @@ io.on('connection', (socket) => {
   });
   
   // ========== WEB COMMAND HANDLER ==========
-  
   socket.on('command', (data) => {
     const { command, value } = data;
     console.log(`🎮 Command: ${command} ${value ? '= ' + value : ''}`);
@@ -147,8 +145,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// ========== WEB INTERFACE ==========
-
+// ========== WEB INTERFACE - MODERN DARK DESIGN ==========
 app.get('/', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -156,183 +153,438 @@ app.get('/', (req, res) => {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-        <title>Ludoo Camera Remote</title>
+        <title>Ludoo Cam</title>
         <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+
             body {
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%);
-                min-height: 100vh;
+                font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui;
+                background: #0f0f12;
+                color: #e4e4e7;
                 padding: 20px;
-                color: #fff;
             }
-            .container { max-width: 600px; margin: 0 auto; }
-            .header { text-align: center; margin-bottom: 20px; }
-            .header h1 { font-size: 28px; background: linear-gradient(135deg, #667eea, #764ba2, #f093fb); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-            .header p { font-size: 12px; color: #888; margin-top: 5px; }
-            
-            .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
-            .stat-card { background: rgba(26, 26, 42, 0.8); backdrop-filter: blur(10px); border-radius: 16px; padding: 12px; text-align: center; border: 1px solid rgba(102, 126, 234, 0.3); }
-            .stat-label { font-size: 11px; color: #888; margin-bottom: 5px; letter-spacing: 1px; }
-            .stat-value { font-size: 22px; font-weight: 700; }
-            .stat-value.online { color: #4CAF50; }
-            .stat-value.streaming { color: #f44336; animation: pulse 1s infinite; }
-            @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
-            
-            .video-container {
-                background: #000;
+
+            .container {
+                max-width: 500px;
+                margin: 0 auto;
+            }
+
+            /* Header */
+            .header {
+                text-align: center;
+                margin-bottom: 24px;
+            }
+
+            .logo {
+                font-size: 32px;
+                font-weight: 700;
+                background: linear-gradient(135deg, #a78bfa, #ec4899);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                letter-spacing: -0.5px;
+            }
+
+            .sub {
+                font-size: 12px;
+                color: #71717a;
+                margin-top: 6px;
+            }
+
+            /* Stats Grid */
+            .stats-grid {
+                display: flex;
+                gap: 12px;
+                margin-bottom: 24px;
+            }
+
+            .stat {
+                flex: 1;
+                background: #18181b;
                 border-radius: 20px;
-                overflow: hidden;
-                aspect-ratio: 16 / 9;
-                margin-bottom: 20px;
-                border: 2px solid rgba(102, 126, 234, 0.5);
-                position: relative;
+                padding: 14px;
+                text-align: center;
+                border: 1px solid #27272a;
             }
-            #video { width: 100%; height: 100%; object-fit: cover; }
-            .video-placeholder { text-align: center; color: #555; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
-            .video-placeholder span { font-size: 48px; }
-            
-            .fullscreen-btn {
+
+            .stat-label {
+                font-size: 11px;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                color: #71717a;
+                margin-bottom: 6px;
+            }
+
+            .stat-value {
+                font-size: 28px;
+                font-weight: 700;
+            }
+
+            .online {
+                color: #22c55e;
+            }
+
+            .live {
+                color: #ef4444;
+                animation: pulse 1.5s infinite;
+            }
+
+            @keyframes pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.5; }
+            }
+
+            /* Video Section */
+            .video-section {
+                background: #000;
+                border-radius: 24px;
+                overflow: hidden;
+                margin-bottom: 24px;
+                border: 1px solid #27272a;
+                position: relative;
+                aspect-ratio: 16/9;
+            }
+
+            #video {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                display: none;
+            }
+
+            .placeholder {
                 position: absolute;
-                bottom: 15px;
-                right: 15px;
-                background: rgba(0,0,0,0.7);
-                backdrop-filter: blur(5px);
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                text-align: center;
+                color: #3f3f46;
+            }
+
+            .placeholder span {
+                font-size: 48px;
+                display: block;
+                margin-bottom: 12px;
+            }
+
+            /* Control Card */
+            .control-card {
+                background: #18181b;
+                border-radius: 24px;
+                padding: 20px;
+                margin-bottom: 24px;
+                border: 1px solid #27272a;
+            }
+
+            .card-title {
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 1.5px;
+                color: #71717a;
+                margin-bottom: 16px;
+            }
+
+            /* Button Grid */
+            .btn-group {
+                display: flex;
+                gap: 12px;
+                margin-bottom: 24px;
+            }
+
+            .btn {
+                flex: 1;
+                padding: 14px;
+                border: none;
+                border-radius: 16px;
+                font-size: 14px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                font-family: inherit;
+            }
+
+            .btn-start {
+                background: #22c55e;
+                color: white;
+            }
+
+            .btn-start:hover {
+                background: #16a34a;
+                transform: translateY(-2px);
+            }
+
+            .btn-stop {
+                background: #ef4444;
+                color: white;
+            }
+
+            .btn-stop:hover {
+                background: #dc2626;
+                transform: translateY(-2px);
+            }
+
+            .btn-flip {
+                background: #3b82f6;
+                color: white;
+            }
+
+            .btn-flip:hover {
+                background: #2563eb;
+                transform: translateY(-2px);
+            }
+
+            /* Quality Options */
+            .quality-grid {
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 8px;
+                margin-bottom: 24px;
+            }
+
+            .quality-option {
+                background: #27272a;
+                padding: 12px;
+                text-align: center;
+                border-radius: 14px;
+                cursor: pointer;
+                font-size: 13px;
+                font-weight: 500;
+                transition: all 0.2s;
+                border: 1px solid transparent;
+            }
+
+            .quality-option:hover {
+                background: #3f3f46;
+                transform: translateY(-1px);
+            }
+
+            .quality-option.active {
+                background: linear-gradient(135deg, #a78bfa, #ec4899);
                 border: none;
                 color: white;
-                font-size: 20px;
-                width: 40px;
-                height: 40px;
+            }
+
+            /* FPS Slider */
+            .fps-control {
+                margin-top: 8px;
+            }
+
+            .fps-slider {
+                width: 100%;
+                height: 4px;
+                -webkit-appearance: none;
+                background: #3f3f46;
+                border-radius: 4px;
+                margin: 12px 0;
+            }
+
+            .fps-slider::-webkit-slider-thumb {
+                -webkit-appearance: none;
+                width: 18px;
+                height: 18px;
+                background: #a78bfa;
                 border-radius: 50%;
                 cursor: pointer;
-                z-index: 10;
-                transition: all 0.3s;
+                transition: all 0.2s;
             }
-            .fullscreen-btn:hover { background: #667eea; transform: scale(1.05); }
-            
-            .controls { background: rgba(26, 26, 42, 0.8); backdrop-filter: blur(10px); border-radius: 20px; padding: 20px; margin-bottom: 20px; border: 1px solid rgba(102, 126, 234, 0.3); }
-            .section-title { font-size: 12px; color: #888; margin-bottom: 12px; letter-spacing: 1px; }
-            .button-group { display: flex; gap: 12px; margin-bottom: 20px; }
-            .btn { flex: 1; padding: 12px; border: none; border-radius: 12px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.3s; }
-            .btn-start { background: linear-gradient(135deg, #4CAF50, #45a049); color: white; }
-            .btn-stop { background: linear-gradient(135deg, #f44336, #da190b); color: white; }
-            .btn-flip { background: linear-gradient(135deg, #2196F3, #0b7dda); color: white; }
-            .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(102,126,234,0.4); }
-            
-            .quality-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 20px; }
-            .quality-btn { padding: 10px; border: 1px solid rgba(102, 126, 234, 0.3); background: rgba(10, 10, 10, 0.6); color: #fff; border-radius: 10px; cursor: pointer; font-size: 12px; text-align: center; transition: all 0.3s; }
-            .quality-btn:hover { border-color: #667eea; transform: translateY(-2px); }
-            .quality-btn.active { background: linear-gradient(135deg, #667eea, #764ba2); border-color: #667eea; }
-            
-            .fps-control { margin-top: 16px; }
-            .fps-slider { width: 100%; height: 4px; -webkit-appearance: none; background: #2a2a2a; border-radius: 2px; margin: 10px 0; }
-            .fps-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; background: #667eea; border-radius: 50%; cursor: pointer; transition: all 0.3s; }
-            .fps-slider::-webkit-slider-thumb:hover { transform: scale(1.2); }
-            .fps-value { text-align: center; font-size: 12px; color: #888; }
-            
-            .devices { background: rgba(26, 26, 42, 0.8); backdrop-filter: blur(10px); border-radius: 20px; padding: 20px; border: 1px solid rgba(102, 126, 234, 0.3); }
-            .device-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-            .device-header h3 { font-size: 14px; color: #888; letter-spacing: 1px; }
-            .device-count { background: rgba(102, 126, 234, 0.3); padding: 4px 10px; border-radius: 20px; font-size: 11px; color: #667eea; }
-            .devices-list { max-height: 250px; overflow-y: auto; }
-            .device-item {
+
+            .fps-slider::-webkit-slider-thumb:hover {
+                transform: scale(1.2);
+            }
+
+            .fps-value {
+                text-align: center;
+                font-size: 13px;
+                color: #a1a1aa;
+            }
+
+            /* Devices List */
+            .devices-card {
+                background: #18181b;
+                border-radius: 24px;
+                padding: 20px;
+                border: 1px solid #27272a;
+            }
+
+            .device-header {
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
+                margin-bottom: 16px;
+            }
+
+            .device-count {
+                background: #27272a;
+                padding: 4px 12px;
+                border-radius: 20px;
+                font-size: 12px;
+                color: #a78bfa;
+            }
+
+            .devices-list {
+                max-height: 280px;
+                overflow-y: auto;
+            }
+
+            .device-item {
+                display: flex;
+                align-items: center;
+                gap: 12px;
                 padding: 12px;
                 margin-bottom: 8px;
-                background: rgba(10, 10, 10, 0.5);
-                border-radius: 12px;
+                background: #27272a;
+                border-radius: 16px;
                 cursor: pointer;
-                transition: all 0.3s;
+                transition: all 0.2s;
                 border: 1px solid transparent;
             }
-            .device-item:hover { background: rgba(102, 126, 234, 0.2); transform: translateX(5px); border-color: #667eea; }
-            .device-item.active { background: linear-gradient(135deg, rgba(102, 126, 234, 0.3), rgba(118, 75, 162, 0.3)); border-color: #667eea; }
-            .device-name { font-size: 14px; font-weight: 500; }
-            .device-status { width: 8px; height: 8px; background: #4CAF50; border-radius: 50%; }
-            .device-badge { font-size: 10px; background: #667eea; padding: 2px 8px; border-radius: 12px; margin-left: 8px; }
-            .empty-devices { text-align: center; color: #555; padding: 20px; }
-            
-            .devices-list::-webkit-scrollbar { width: 4px; }
-            .devices-list::-webkit-scrollbar-track { background: #1a1a1a; border-radius: 10px; }
-            .devices-list::-webkit-scrollbar-thumb { background: #667eea; border-radius: 10px; }
-            
+
+            .device-item:hover {
+                background: #3f3f46;
+                transform: translateX(4px);
+            }
+
+            .device-item.active {
+                border-color: #a78bfa;
+                background: linear-gradient(135deg, rgba(167, 139, 250, 0.1), rgba(236, 72, 153, 0.1));
+            }
+
+            .device-icon {
+                font-size: 24px;
+            }
+
+            .device-info {
+                flex: 1;
+            }
+
+            .device-name {
+                font-size: 14px;
+                font-weight: 600;
+                margin-bottom: 4px;
+            }
+
+            .device-model {
+                font-size: 11px;
+                color: #71717a;
+            }
+
+            .device-status {
+                width: 8px;
+                height: 8px;
+                background: #22c55e;
+                border-radius: 50%;
+                box-shadow: 0 0 8px #22c55e;
+            }
+
+            .empty-message {
+                text-align: center;
+                color: #52525b;
+                padding: 32px;
+            }
+
+            /* Scrollbar */
+            .devices-list::-webkit-scrollbar {
+                width: 4px;
+            }
+
+            .devices-list::-webkit-scrollbar-track {
+                background: #27272a;
+                border-radius: 10px;
+            }
+
+            .devices-list::-webkit-scrollbar-thumb {
+                background: #a78bfa;
+                border-radius: 10px;
+            }
+
+            /* Responsive */
             @media (max-width: 480px) {
-                body { padding: 12px; }
-                .stats { gap: 8px; }
-                .stat-card { padding: 10px; }
-                .stat-value { font-size: 18px; }
-                .quality-grid { gap: 6px; }
-                .quality-btn { padding: 8px; font-size: 10px; }
+                body {
+                    padding: 16px;
+                }
+                
+                .stat-value {
+                    font-size: 22px;
+                }
+                
+                .btn {
+                    padding: 12px;
+                }
+                
+                .quality-option {
+                    padding: 10px;
+                    font-size: 12px;
+                }
             }
         </style>
     </head>
     <body>
         <div class="container">
             <div class="header">
-                <h1>📹 Ludoo Remote</h1>
-                <p id="selectedLabel">Select a device to view</p>
+                <div class="logo">ludoo</div>
+                <div class="sub">camera remote controller</div>
             </div>
-            
-            <div class="stats">
-                <div class="stat-card">
-                    <div class="stat-label">STATUS</div>
-                    <div class="stat-value" id="serverStatus">● Online</div>
+
+            <div class="stats-grid">
+                <div class="stat">
+                    <div class="stat-label">status</div>
+                    <div class="stat-value" id="statusIndicator">●</div>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-label">DEVICES</div>
+                <div class="stat">
+                    <div class="stat-label">devices</div>
                     <div class="stat-value" id="deviceCount">0</div>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-label">FPS</div>
-                    <div class="stat-value" id="fpsCount">0</div>
+                <div class="stat">
+                    <div class="stat-label">fps</div>
+                    <div class="stat-value" id="fpsValue">0</div>
                 </div>
             </div>
-            
-            <div class="video-container" id="videoContainer">
-                <img id="video" style="display: none;">
-                <div id="placeholder" class="video-placeholder">
-                    <span>📷</span><br>
-                    No stream
+
+            <div class="video-section">
+                <img id="video" alt="Live stream">
+                <div id="placeholder" class="placeholder">
+                    <span>📷</span>
+                    <div>no active stream</div>
                 </div>
-                <button class="fullscreen-btn" id="fullscreenBtn">⛶</button>
             </div>
-            
-            <div class="controls">
-                <div class="section-title">🎮 CONTROLS</div>
-                <div class="button-group">
-                    <button class="btn btn-start" id="startBtn">▶ START</button>
-                    <button class="btn btn-stop" id="stopBtn">⏹ STOP</button>
-                    <button class="btn btn-flip" id="flipBtn">🔄 FLIP</button>
+
+            <div class="control-card">
+                <div class="card-title">controls</div>
+                <div class="btn-group">
+                    <button class="btn btn-start" id="startBtn">▶ start</button>
+                    <button class="btn btn-stop" id="stopBtn">⏹ stop</button>
+                    <button class="btn btn-flip" id="flipBtn">🔄 flip</button>
                 </div>
-                
-                <div class="section-title">📐 QUALITY</div>
+
+                <div class="card-title">quality</div>
                 <div class="quality-grid">
-                    <button class="quality-btn" data-quality="120">120p</button>
-                    <button class="quality-btn" data-quality="140">140p</button>
-                    <button class="quality-btn active" data-quality="240">240p</button>
-                    <button class="quality-btn" data-quality="360">360p</button>
+                    <div class="quality-option" data-quality="120">120p</div>
+                    <div class="quality-option" data-quality="140">140p</div>
+                    <div class="quality-option active" data-quality="240">240p</div>
+                    <div class="quality-option" data-quality="360">360p</div>
                 </div>
-                
+
                 <div class="fps-control">
-                    <div class="section-title">⚡ FPS</div>
+                    <div class="card-title">frame rate</div>
                     <input type="range" id="fpsSlider" min="5" max="30" value="15" step="1" class="fps-slider">
-                    <div class="fps-value" id="fpsLabel">15 FPS (Recommended)</div>
+                    <div class="fps-value" id="fpsLabel">15 fps</div>
                 </div>
             </div>
-            
-            <div class="devices">
+
+            <div class="devices-card">
                 <div class="device-header">
-                    <h3>📱 CONNECTED DEVICES</h3>
-                    <div class="device-count" id="deviceCountBadge">0</div>
+                    <div class="card-title" style="margin-bottom: 0;">connected devices</div>
+                    <div class="device-count" id="deviceBadge">0</div>
                 </div>
                 <div class="devices-list" id="devicesList">
-                    <div class="empty-devices">No devices connected</div>
+                    <div class="empty-message">no devices connected</div>
                 </div>
             </div>
         </div>
-        
+
         <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
         <script>
             const socket = io();
@@ -340,95 +592,78 @@ app.get('/', (req, res) => {
             let lastFpsUpdate = Date.now();
             let isStreaming = false;
             let selectedDeviceId = null;
-            let devicesData = [];
-            
+
+            // DOM elements
             const video = document.getElementById('video');
             const placeholder = document.getElementById('placeholder');
             const deviceCountSpan = document.getElementById('deviceCount');
-            const deviceCountBadge = document.getElementById('deviceCountBadge');
-            const fpsCountSpan = document.getElementById('fpsCount');
+            const deviceBadge = document.getElementById('deviceBadge');
+            const fpsValueSpan = document.getElementById('fpsValue');
+            const statusIndicator = document.getElementById('statusIndicator');
             const devicesList = document.getElementById('devicesList');
             const fpsSlider = document.getElementById('fpsSlider');
             const fpsLabel = document.getElementById('fpsLabel');
-            const selectedLabel = document.getElementById('selectedLabel');
-            const videoContainer = document.getElementById('videoContainer');
-            const fullscreenBtn = document.getElementById('fullscreenBtn');
-            
-            // Fullscreen
-            fullscreenBtn.onclick = () => {
-                if (!document.fullscreenElement) {
-                    videoContainer.requestFullscreen();
-                } else {
-                    document.exitFullscreen();
-                }
-            };
-            
-            socket.on('connect', () => {
-                console.log('✅ Connected to server');
-            });
-            
+
+            // Frame counter
             socket.on('frame', (data) => {
                 if (data && data.image && isStreaming) {
                     video.src = 'data:image/jpeg;base64,' + data.image;
                     video.style.display = 'block';
                     placeholder.style.display = 'none';
                     frameCount++;
+                    
                     const now = Date.now();
                     if (now - lastFpsUpdate >= 1000) {
-                        fpsCountSpan.textContent = frameCount;
+                        fpsValueSpan.textContent = frameCount;
                         frameCount = 0;
                         lastFpsUpdate = now;
                     }
                 }
             });
-            
+
+            // Devices list update
             socket.on('devices_list', (devices) => {
-                console.log('📱 Devices list received:', devices.length);
-                devicesData = devices;
                 deviceCountSpan.textContent = devices.length;
-                deviceCountBadge.textContent = devices.length;
+                deviceBadge.textContent = devices.length;
                 
                 if (devices.length === 0) {
-                    devicesList.innerHTML = '<div class="empty-devices">No devices connected</div>';
+                    devicesList.innerHTML = '<div class="empty-message">no devices connected</div>';
                     video.style.display = 'none';
                     placeholder.style.display = 'block';
-                    selectedLabel.innerHTML = 'Select a device to view';
                 } else {
                     devicesList.innerHTML = devices.map(device => 
                         '<div class="device-item" onclick="selectDevice(\'' + device.id + '\')">' +
-                            '<span class="device-name">📱 ' + device.name + '</span>' +
+                            '<div class="device-icon">📱</div>' +
+                            '<div class="device-info">' +
+                                '<div class="device-name">' + device.name + '</div>' +
+                                '<div class="device-model">' + device.model + '</div>' +
+                            '</div>' +
                             '<div class="device-status"></div>' +
                         '</div>'
                     ).join('');
-                    selectedLabel.innerHTML = 'Click on a device to view';
                 }
             });
-            
+
+            // Status update
             socket.on('status_update', (status) => {
                 isStreaming = status.stream;
-                const serverStatus = document.getElementById('serverStatus');
+                
                 if (status.stream) {
-                    serverStatus.innerHTML = '● LIVE';
-                    serverStatus.style.color = '#f44336';
+                    statusIndicator.innerHTML = '● live';
+                    statusIndicator.className = 'stat-value live';
                 } else {
-                    serverStatus.innerHTML = '● Online';
-                    serverStatus.style.color = '#4CAF50';
+                    statusIndicator.innerHTML = '● online';
+                    statusIndicator.className = 'stat-value online';
                 }
             });
-            
+
+            // Select device function
             window.selectDevice = function(deviceId) {
-                console.log('Selecting device:', deviceId);
                 selectedDeviceId = deviceId;
-                socket.emit('select_device', { deviceId: deviceId });
                 isStreaming = false;
                 video.style.display = 'none';
                 placeholder.style.display = 'block';
-                fpsCountSpan.textContent = '0';
-                
-                const device = devicesData.find(d => d.id === deviceId);
-                if (device) {
-                    selectedLabel.innerHTML = 'Viewing: ' + device.name;
-                }
+                fpsValueSpan.textContent = '0';
                 
                 document.querySelectorAll('.device-item').forEach(el => {
                     el.classList.remove('active');
@@ -436,26 +671,62 @@ app.get('/', (req, res) => {
                 const activeEl = document.querySelector('.device-item[onclick="selectDevice(\'' + deviceId + '\')"]');
                 if (activeEl) activeEl.classList.add('active');
             };
-            
+
+            // Send command
             function sendCommand(command, value) {
                 socket.emit('command', { command, value });
-                console.log('Command:', command, value);
             }
-            
+
+            // Event listeners
             document.getElementById('startBtn').onclick = () => {
                 sendCommand('start');
                 isStreaming = true;
             };
+            
             document.getElementById('stopBtn').onclick = () => {
                 sendCommand('stop');
                 isStreaming = false;
                 video.style.display = 'none';
                 placeholder.style.display = 'block';
-                fpsCountSpan.textContent = '0';
+                fpsValueSpan.textContent = '0';
             };
+            
             document.getElementById('flipBtn').onclick = () => sendCommand('flip');
             
-            document.querySelectorAll('.quality-btn').forEach(btn => {
+            // Quality selector
+            document.querySelectorAll('.quality-option').forEach(btn => {
                 btn.onclick = () => {
-                    document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
-  
+                    document.querySelectorAll('.quality-option').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    const quality = parseInt(btn.dataset.quality);
+                    sendCommand('quality', quality);
+                };
+            });
+            
+            // FPS slider
+            fpsSlider.oninput = (e) => {
+                const value = e.target.value;
+                fpsLabel.textContent = value + ' fps';
+                sendCommand('fps', parseInt(value));
+            };
+        </script>
+    </body>
+    </html>
+  `);
+});
+
+// ========== START SERVER ==========
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`
+╔═══════════════════════════════════╗
+║     🎥 LUDOO CAMERA SERVER        ║
+╠═══════════════════════════════════╣
+║  Port: ${PORT}                          
+║  Commands: start, stop, flip     ║
+║            quality, fps           ║
+╠═══════════════════════════════════╣
+║  Ready for connections...         ║
+╚═══════════════════════════════════╝
+  `);
+});
