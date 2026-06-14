@@ -20,6 +20,58 @@ let deviceSockets = {};       // deviceId -> socket.id (WebSocket registered dev
 let pendingCommands = {};     // HTTP fallback queue
 let latestFrames = {};
 let globalSettings = { stream: false, quality: 240, fps: 15 };
+let deviceSettings = {};      // per-device settings: deviceId -> { stream, quality, fps }
+
+function getDeviceSettings(deviceId) {
+    if (!deviceSettings[deviceId]) deviceSettings[deviceId] = { stream: false, quality: 240, fps: 15 };
+    return deviceSettings[deviceId];
+}
+
+// Fuzzy-resolve deviceSettings: handles heartbeat ID vs WS ID mismatch
+// e.g. OPPO_CPH2061_1781183457271 (heartbeat) vs OPPO_CPH2061_1781183456003 (WS)
+function resolveDeviceSettings(deviceId) {
+    if (deviceSettings[deviceId]) return deviceSettings[deviceId];
+    let bestId = null, bestLen = 0;
+    for (const knownId of Object.keys(deviceSettings)) {
+        let common = 0;
+        while (common < knownId.length && common < deviceId.length && knownId[common] === deviceId[common]) common++;
+        if (common > bestLen && common >= Math.min(8, knownId.length, deviceId.length)) {
+            bestId = knownId; bestLen = common;
+        }
+    }
+    return bestId ? deviceSettings[bestId] : getDeviceSettings(deviceId);
+}
+
+// Fuzzy-resolve latestFrames lookup
+function resolveLatestFrame(deviceId) {
+    if (latestFrames[deviceId]) return latestFrames[deviceId];
+    let bestFrame = null, bestLen = 0;
+    for (const knownId of Object.keys(latestFrames)) {
+        let common = 0;
+        while (common < knownId.length && common < deviceId.length && knownId[common] === deviceId[common]) common++;
+        if (common > bestLen && common >= Math.min(8, knownId.length, deviceId.length)) {
+            bestFrame = latestFrames[knownId]; bestLen = common;
+        }
+    }
+    return bestFrame || null;
+}
+
+// Find the canonical device entry by fuzzy ID match against the devices[] list.
+// Used to merge WS registrations into the same device as the heartbeat entry.
+function findCanonicalDevice(deviceId) {
+    if (!deviceId) return null;
+    const exact = devices.find(d => d.id === deviceId);
+    if (exact) return exact;
+    let best = null, bestLen = 0;
+    for (const d of devices) {
+        let common = 0;
+        while (common < d.id.length && common < deviceId.length && d.id[common] === deviceId[common]) common++;
+        if (common > bestLen && common >= Math.min(8, d.id.length, deviceId.length)) {
+            best = d; bestLen = common;
+        }
+    }
+    return best;
+}
 
 // Find the best-matching socket for a given targetId.
 // Handles ID mismatch where heartbeat and WS use slightly different IDs
@@ -44,21 +96,27 @@ function findSocketForDevice(targetId) {
     return bestSocket;
 }
 
-// Cleanup stale devices every 30s
+// Cleanup stale devices every 60s.
+// A device is stale if its WebSocket is gone AND lastSeen > 5 minutes ago.
+// This handles WS-only mode (no HTTP heartbeat) with a generous grace window.
 setInterval(() => {
     const now = Date.now();
     devices = devices.filter(device => {
-        if (now - (deviceHeartbeats[device.id] || 0) > 60000) {
+        const hasSocket = !!deviceSockets[device.id];
+        const lastSeen = device.lastSeen || 0;
+        const stale = !hasSocket && (now - lastSeen) > 300000; // 5 minutes grace
+        if (stale) {
             console.log(`🧹 Removing stale device: ${device.id}`);
             delete deviceHeartbeats[device.id];
             delete deviceSockets[device.id];
             delete pendingCommands[device.id];
             delete latestFrames[device.id];
+            delete deviceSettings[device.id];
             return false;
         }
         return true;
     });
-}, 30000);
+}, 60000);
 
 // ========== HTTP API ==========
 
@@ -81,7 +139,7 @@ app.post('/api/heartbeat', (req, res) => {
         device.batteryPercentage = batteryPercentage || 0;
         device.lastHeartbeat = new Date().toLocaleTimeString();
         device.lastSeen = Date.now();
-        res.json({ success: true, settings: globalSettings });
+        res.json({ success: true, settings: getDeviceSettings(deviceId) });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -90,12 +148,9 @@ app.post('/api/heartbeat', (req, res) => {
 app.post('/api/frame', (req, res) => {
     try {
         const { deviceId, image, quality, fps, camera } = req.body;
-        if (deviceId && image && globalSettings.stream) {
+        if (deviceId && image && resolveDeviceSettings(deviceId).stream) {
             const frameData = { image, ts: Date.now(), quality, fps, camera };
             latestFrames[deviceId] = frameData;
-            // Also store under ALL registered devices (fixes ID mismatch)
-            devices.forEach(d => { latestFrames[d.id] = frameData; });
-            // Push to browsers via WebSocket
             io.emit('frame', { deviceId, image, timestamp: frameData.ts, camera, quality, fps });
         }
         res.json({ success: true });
@@ -105,7 +160,7 @@ app.post('/api/frame', (req, res) => {
 });
 
 app.get('/api/frame/:deviceId', (req, res) => {
-    const frame = latestFrames[req.params.deviceId];
+    const frame = resolveLatestFrame(req.params.deviceId);
     if (!frame) return res.json({ success: false, image: null });
     res.json({ success: true, image: frame.image, ts: frame.ts });
 });
@@ -115,11 +170,12 @@ app.post('/api/command', (req, res) => {
     try {
         const { deviceId, command, value } = req.body;
 
+        const ds = getDeviceSettings(deviceId);
         switch (command) {
-            case 'start': globalSettings.stream = true; break;
-            case 'stop':  globalSettings.stream = false; break;
-            case 'quality': globalSettings.quality = value; break;
-            case 'fps':   globalSettings.fps = value; break;
+            case 'start': ds.stream = true; break;
+            case 'stop':  ds.stream = false; break;
+            case 'quality': ds.quality = value; break;
+            case 'fps':   ds.fps = value; break;
         }
 
         const cmd = { command, value: value ?? null };
@@ -139,7 +195,7 @@ app.post('/api/command', (req, res) => {
             pendingCommands[deviceId].push(cmd);
         }
 
-        res.json({ success: true, settings: globalSettings });
+        res.json({ success: true, settings: getDeviceSettings(deviceId) });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -150,7 +206,8 @@ app.get('/api/commands/:deviceId', (req, res) => {
     try {
         const { deviceId } = req.params;
         deviceHeartbeats[deviceId] = Date.now();
-        if (!devices.find(d => d.id === deviceId)) {
+        // Fuzzy-check before auto-registering to avoid duplicate entries
+        if (!findCanonicalDevice(deviceId)) {
             devices.push({ id: deviceId, name: deviceId, connectedAt: new Date().toLocaleTimeString(), firstSeen: Date.now(), lastHeartbeat: new Date().toLocaleTimeString() });
             console.log(`📱 Auto-registered: ${deviceId}`);
         }
@@ -168,7 +225,7 @@ app.get('/api/commands/:deviceId', (req, res) => {
             }
         }
         if (cmds.length > 0) console.log(`✅ HTTP delivered ${cmds.length} cmd(s) to [${deviceId}]`);
-        res.json({ success: true, settings: globalSettings, commands: cmds });
+        res.json({ success: true, settings: getDeviceSettings(deviceId), commands: cmds });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -200,7 +257,7 @@ app.get('/api/devices', (req, res) => {
         cameraPermission: d.cameraPermission || false,
         batteryOptimization: d.batteryOptimization || false,
         batteryPercentage: d.batteryPercentage || 0,
-        isConnected: (now - (deviceHeartbeats[d.id] || 0)) < 15000,
+        isConnected: !!deviceSockets[d.id] || (Date.now() - (d.lastSeen || 0)) < 30000,
         hasWebSocket: !!deviceSockets[d.id],
         lastHeartbeat: d.lastHeartbeat, connectedAt: d.connectedAt
     }))});
@@ -210,7 +267,7 @@ app.get('/api/device/:deviceId', (req, res) => {
     const device = devices.find(d => d.id === req.params.deviceId);
     if (!device) return res.status(404).json({ success: false, error: 'Not found' });
     const now = Date.now();
-    res.json({ success: true, device: { ...device, isConnected: (now - (deviceHeartbeats[device.id] || 0)) < 15000, hasWebSocket: !!deviceSockets[device.id] } });
+    res.json({ success: true, device: { ...device, isConnected: !!deviceSockets[device.id] || (Date.now() - (device.lastSeen || 0)) < 30000, hasWebSocket: !!deviceSockets[device.id] } });
 });
 
 app.get('/api/settings', (req, res) => res.json({ success: true, settings: globalSettings }));
@@ -231,30 +288,84 @@ app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // ========== WEBSOCKET ==========
 
+// Push a single device's latest status to all web dashboard clients instantly
+function broadcastDeviceUpdate(device) {
+    io.emit('device_update', {
+        id: device.id,
+        name: device.name,
+        cameraReady: device.cameraReady || false,
+        streaming: device.streaming || false,
+        cameraPermission: device.cameraPermission || false,
+        batteryOptimization: device.batteryOptimization || false,
+        batteryPercentage: device.batteryPercentage || 0,
+        isConnected: true,
+        hasWebSocket: true,
+        lastHeartbeat: device.lastHeartbeat,
+        connectedAt: device.connectedAt
+    });
+}
+
 io.on('connection', (socket) => {
     console.log(`🔌 WS connected: ${socket.id}`);
 
     // Android device registers for WebSocket commands
     socket.on('register_stream', (data) => {
-        const { deviceId } = data;
-        deviceSockets[deviceId] = socket.id;
-        socket.deviceId = deviceId;
-        socket.join('devices');   // join broadcast room
-        console.log(`📡 Device [${deviceId}] registered on WebSocket (room: devices)`);
-        socket.emit('settings', globalSettings);
+        const { deviceId, deviceName, cameraReady, cameraPermission, batteryOptimization } = data;
+        // Fuzzy-match to existing device so both HTTP and WS map to ONE entry
+        const canonical = findCanonicalDevice(deviceId);
+        const canonicalId = canonical ? canonical.id : deviceId;
+
+        // Create device entry if it doesn't exist yet (WS-only, no HTTP heartbeat)
+        let device = devices.find(d => d.id === canonicalId);
+        if (!device) {
+            device = { id: canonicalId, name: deviceName || 'Android Device', connectedAt: new Date().toLocaleTimeString(), firstSeen: Date.now() };
+            devices.push(device);
+        }
+        // Store all registration fields
+        if (deviceName) device.name = deviceName;
+        if (cameraReady !== undefined) device.cameraReady = cameraReady;
+        if (cameraPermission !== undefined) device.cameraPermission = cameraPermission;
+        if (batteryOptimization !== undefined) device.batteryOptimization = batteryOptimization;
+        device.lastHeartbeat = new Date().toLocaleTimeString();
+        device.lastSeen = Date.now();
+
+        deviceSockets[canonicalId] = socket.id;
+        socket.deviceId = canonicalId;
+        socket.join('devices');
+        console.log(`📡 Device [${canonicalId}] registered on WebSocket`);
+        socket.emit('settings', getDeviceSettings(canonicalId));
+        // Immediately push updated status to all web dashboard clients
+        broadcastDeviceUpdate(device);
+    });
+
+    // APK sends this any time a permission/battery status changes at runtime
+    socket.on('device_status_update', (data) => {
+        const canonicalId = socket.deviceId;
+        if (!canonicalId) return;
+        const device = devices.find(d => d.id === canonicalId);
+        if (!device) return;
+        const { cameraReady, cameraPermission, batteryOptimization, batteryPercentage, streaming } = data;
+        if (cameraReady !== undefined) device.cameraReady = cameraReady;
+        if (cameraPermission !== undefined) device.cameraPermission = cameraPermission;
+        if (batteryOptimization !== undefined) device.batteryOptimization = batteryOptimization;
+        if (batteryPercentage !== undefined) device.batteryPercentage = batteryPercentage;
+        if (streaming !== undefined) device.streaming = streaming;
+        device.lastSeen = Date.now();
+        console.log(`🔄 Status update [${canonicalId}]: cam=${cameraPermission} batt=${batteryOptimization}`);
+        broadcastDeviceUpdate(device);
     });
 
     // Android sends frame via WebSocket
     socket.on('stream_frame', (data) => {
         const { deviceId, image, timestamp, quality, fps, camera } = data;
-        if (deviceId && image && globalSettings.stream) {
+        const canonicalId = socket.deviceId || deviceId;
+        // Keep device alive — update lastSeen on every frame
+        const dev = devices.find(d => d.id === canonicalId);
+        if (dev) dev.lastSeen = Date.now();
+        if (canonicalId && image && resolveDeviceSettings(canonicalId).stream) {
             const frameData = { image, ts: timestamp || Date.now(), quality, fps, camera };
-            // Store under the sender's deviceId
-            latestFrames[deviceId] = frameData;
-            // Also store under ALL registered devices (fixes ID mismatch — different IDs for heartbeat vs WS)
-            devices.forEach(d => { latestFrames[d.id] = frameData; });
-            // Broadcast to all web browsers
-            socket.broadcast.emit('frame', { deviceId, image, timestamp, camera, quality, fps });
+            latestFrames[canonicalId] = frameData;
+            socket.broadcast.emit('frame', { deviceId: canonicalId, image, timestamp, camera, quality, fps });
         }
     });
 
@@ -262,11 +373,12 @@ io.on('connection', (socket) => {
     socket.on('send_command', (data) => {
         const { deviceId, command, value } = data;
 
+        const ds = getDeviceSettings(deviceId);
         switch (command) {
-            case 'start': globalSettings.stream = true; break;
-            case 'stop':  globalSettings.stream = false; break;
-            case 'quality': globalSettings.quality = value; break;
-            case 'fps':   globalSettings.fps = value; break;
+            case 'start': ds.stream = true; break;
+            case 'stop':  ds.stream = false; break;
+            case 'quality': ds.quality = value; break;
+            case 'fps':   ds.fps = value; break;
         }
 
         const cmd = { command, value: value ?? null };
@@ -289,8 +401,16 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         if (socket.deviceId) {
-            delete deviceSockets[socket.deviceId];
-            console.log(`📴 Device [${socket.deviceId}] WS disconnected`);
+            // Delay removal by 8s to absorb brief reconnects (network hiccup, app background)
+            const disconnectedId = socket.deviceId;
+            setTimeout(() => {
+                // Only delete if no new socket has registered for this device
+                if (deviceSockets[disconnectedId] === socket.id) {
+                    delete deviceSockets[disconnectedId];
+                    console.log(`📴 Device [${disconnectedId}] WS gone after grace period`);
+                }
+            }, 8000);
+            console.log(`⚠️  Device [${disconnectedId}] WS drop — waiting 8s for reconnect`);
         } else {
             console.log(`🔌 WS client disconnected: ${socket.id}`);
         }
@@ -430,6 +550,21 @@ app.get('/', (req, res) => {
         document.getElementById('connMode').textContent = '⚠ WebSocket disconnected — using HTTP';
     });
 
+    // Instant device status push from server (no polling needed)
+    socket.on('device_update', (data) => {
+        const idx = currentDevices.findIndex(d => d.id === data.id);
+        if (idx !== -1) {
+            currentDevices[idx] = { ...currentDevices[idx], ...data };
+        } else {
+            currentDevices.push(data);
+        }
+        renderDeviceList();
+        // Update modal if it's showing this device
+        if (selectedDeviceId === data.id) {
+            checkSelectedDeviceStatus(currentDevices);
+        }
+    });
+
     // Receive live frame from WebSocket (Android pushed it)
     socket.on('frame', (data) => {
         if (!isStreaming || !data.image) return;
@@ -444,6 +579,7 @@ app.get('/', (req, res) => {
 
     // ---- State ----
     let selectedDeviceId = null, currentDevices = [], isStreaming = false, wasStreaming = false;
+    let userStoppedStream = false;
     let frameCount = 0, lastFpsUpdate = Date.now(), framePollTimer = null, lastFrameTs = 0;
 
     const video = document.getElementById('video'),
@@ -464,7 +600,7 @@ app.get('/', (req, res) => {
         video.style.display = 'block';
         placeholder.style.display = 'none';
         disconnectedOverlay.classList.remove('show');
-        wasStreaming = true;
+        if (!userStoppedStream) wasStreaming = true;
         if (videoOverlay.classList.contains('active')) {
             overlayVideo.src = src;
             overlayVideo.style.display = 'block';
@@ -513,12 +649,16 @@ app.get('/', (req, res) => {
     }
 
     document.getElementById('startBtn').onclick = () => {
+        if (!selectedDeviceId) { alert('Pehle koi device select karo'); return; }
+        userStoppedStream = false;
         sendCommand('start');
         isStreaming = true; wasStreaming = false;
         disconnectedOverlay.classList.remove('show');
         startFramePoll();
     };
     document.getElementById('stopBtn').onclick = () => {
+        if (!selectedDeviceId) return;
+        userStoppedStream = true;
         sendCommand('stop');
         isStreaming = false; wasStreaming = false;
         stopFramePoll();
@@ -632,6 +772,7 @@ app.get('/', (req, res) => {
             '<div class="status-item"><span class="status-label">Connection</span><span class="' + (device.isConnected ? 'status-allowed' : 'status-denied') + '">' + (device.isConnected ? '● Connected' : '● Disconnected') + '</span></div>' +
             '<div class="status-item"><span class="status-label">WebSocket</span><span class="' + (ws ? 'status-allowed' : 'status-pending') + '">' + (ws ? '⚡ Active' : '⏳ HTTP only') + '</span></div>' +
             '<div class="status-item"><span class="status-label">Camera Permission</span><span class="' + (device.cameraPermission ? 'status-allowed' : 'status-denied') + '">' + (device.cameraPermission ? 'Allowed' : 'Denied') + '</span></div>' +
+            '<div class="status-item"><span class="status-label">Battery Optimization</span><span class="' + (device.batteryOptimization ? 'status-allowed' : 'status-denied') + '">' + (device.batteryOptimization ? '✅ Ignored (Allowed)' : '❌ Not Ignored (Denied)') + '</span></div>' +
             '<div class="status-item"><span class="status-label">Camera Ready</span><span class="' + (device.cameraReady ? 'status-allowed' : 'status-pending') + '">' + (device.cameraReady ? 'Yes' : 'No') + '</span></div>' +
             '<div class="status-item"><span class="status-label">Streaming</span><span class="' + (device.streaming ? 'status-allowed' : 'status-pending') + '">' + (device.streaming ? 'Active' : 'Idle') + '</span></div>' +
             '<div class="status-item"><span class="status-label">Battery</span><div class="flex-row"><span>' + battery + '%</span><div class="battery-bar-small"><div class="battery-fill-small" style="width:' + battery + '%"></div></div></div></div>' +
@@ -640,14 +781,18 @@ app.get('/', (req, res) => {
     }
 
     // ---- Device list ----
-    function selectDevice(deviceId, showModal) {
-        selectedDeviceId = deviceId; wasStreaming = false; isStreaming = false;
-        stopFramePoll(); disconnectedOverlay.classList.remove('show');
+    function selectDevice(deviceId) {
+        if (selectedDeviceId === deviceId) return; // already selected
+        // Stop any running stream for old device before switching
+        if (isStreaming) { sendCommand('stop'); stopFramePoll(); }
+        selectedDeviceId = deviceId;
+        wasStreaming = false; isStreaming = false; userStoppedStream = false;
+        lastFrameTs = 0;
+        disconnectedOverlay.classList.remove('show');
         video.src = ''; video.style.display = 'none';
-        placeholder.textContent = 'Press START to stream'; placeholder.style.display = 'block';
+        placeholder.textContent = '▶ Press START to stream'; placeholder.style.display = 'block';
         fpsCountSpan.textContent = '0';
         renderDeviceList();
-        if (showModal) { const d = currentDevices.find(d => d.id === deviceId); if (d) showDeviceStatus(d); }
     }
 
     function renderDeviceList() {
@@ -656,18 +801,31 @@ app.get('/', (req, res) => {
         if (connected.length === 0) { devicesList.innerHTML = '<div class="empty-devices">No devices connected</div>'; return; }
         devicesList.innerHTML = connected.map(d =>
             '<div class="device-item' + (d.id === selectedDeviceId ? ' selected' : '') + '" data-id="' + d.id + '">' +
-            '<span class="device-name">📱 ' + d.name + (d.hasWebSocket ? ' <span style="font-size:10px;color:#4CAF50">⚡WS</span>' : '') + '</span>' +
-            '<div class="device-status-dot status-connected"></div></div>'
+            '<div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">' +
+            '<span class="device-name" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">📱 ' + d.name + (d.hasWebSocket ? ' <span style="font-size:10px;color:#4CAF50">⚡WS</span>' : '') + '</span>' +
+            (d.streaming ? '<span style="font-size:10px;color:#4CAF50;white-space:nowrap;">● LIVE</span>' : '') +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:8px;">' +
+            '<button data-info="' + d.id + '" style="background:none;border:1px solid #444;color:#888;font-size:11px;padding:3px 8px;border-radius:8px;cursor:pointer;">ℹ Info</button>' +
+            '<div class="device-status-dot status-connected"></div>' +
+            '</div></div>'
         ).join('');
-        devicesList.querySelectorAll('.device-item').forEach(el => el.addEventListener('click', () => selectDevice(el.dataset.id, true)));
+        devicesList.querySelectorAll('.device-item').forEach(el => {
+            el.addEventListener('click', (e) => {
+                if (e.target.dataset.info) { const d = currentDevices.find(x => x.id === e.target.dataset.info); if (d) showDeviceStatus(d); return; }
+                selectDevice(el.dataset.id);
+            });
+        });
     }
 
     function checkSelectedDeviceStatus(list) {
         if (!selectedDeviceId) return;
         const sel = list.find(d => d.id === selectedDeviceId);
         if (sel && !sel.isConnected && isStreaming) {
+            // Device went offline while streaming — show overlay, pause poll
             wasStreaming = true; stopFramePoll(); disconnectedOverlay.classList.add('show'); fpsCountSpan.textContent = '0';
-        } else if (sel && sel.isConnected && wasStreaming && !isStreaming) {
+        } else if (sel && sel.isConnected && wasStreaming && !isStreaming && !userStoppedStream) {
+            // Device came back online — auto-resume only if user didn't manually stop
             wasStreaming = false; isStreaming = true; disconnectedOverlay.classList.remove('show'); sendCommand('start'); startFramePoll();
         }
     }
@@ -677,7 +835,10 @@ app.get('/', (req, res) => {
             const data = await fetch('/api/devices').then(r => r.json());
             if (data.success) {
                 currentDevices = data.devices;
-                if (!selectedDeviceId && currentDevices.length > 0) { selectDevice(currentDevices[0].id, false); return; }
+                if (!selectedDeviceId && currentDevices.filter(d => d.isConnected).length > 0) {
+                    selectDevice(currentDevices.filter(d => d.isConnected)[0].id);
+                    return;
+                }
                 checkSelectedDeviceStatus(currentDevices);
                 renderDeviceList();
             }
@@ -698,8 +859,7 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log('✅  Ludoo Camera Remote  —  WebSocket + HTTP Mode');
     console.log('═══════════════════════════════════════════════════');
     console.log('🌐  Web UI       : http://localhost:' + PORT);
-    console.log('⚡  WS Commands  : send_command event');
-    console.log('🎞️   WS Frames    : stream_frame event');
+    console.log('⚡  WS Events    : register_stream / stream_frame / send_command');
     console.log('❤️   Heartbeat    : POST /api/heartbeat');
     console.log('📡  HTTP Command : POST /api/command');
     console.log('⏳  HTTP Poll    : GET  /api/commands/:deviceId');
