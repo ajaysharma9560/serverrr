@@ -63,6 +63,18 @@ async function verifyFirebaseToken(idToken) {
     return decoded; // { uid, email, name, picture, ... }
 }
 
+io.use((socket, next) => {
+    const idToken = socket.handshake.auth?.token;
+    if (!idToken) return next(); // Android device sockets do not use dashboard auth.
+
+    verifyFirebaseToken(idToken)
+        .then(decoded => {
+            socket.data.userUid = decoded.uid;
+            next();
+        })
+        .catch(() => next(new Error('Unauthorized')));
+});
+
 // Helper: get or create user doc with persistent UUID
 async function getOrCreateUser(decoded) {
     if (!firebaseReady) throw new Error('Firebase not configured');
@@ -329,6 +341,39 @@ const requestedFiles = {};
 const commandQueue = {};
 const waitingClients = {};
 
+const dashboardRoom = (uid) => `dashboard:${uid}`;
+
+async function resolveDeviceOwner(deviceUUID) {
+    if (!firebaseReady) {
+        const error = new Error('Firebase not configured');
+        error.statusCode = 503;
+        throw error;
+    }
+    const snap = await db.collection('users')
+        .where('deviceUUID', '==', deviceUUID)
+        .limit(1)
+        .get();
+    return snap.empty ? null : snap.docs[0].id;
+}
+
+function emitDeviceUpdate(device) {
+    if (!device?.ownerUid) return;
+    io.to(dashboardRoom(device.ownerUid)).emit('device_update', {
+        id: device.id,
+        name: device.name,
+        cameraReady: device.cameraReady || false,
+        streaming: device.streaming || false,
+        cameraPermission: device.cameraPermission || false,
+        batteryOptimization: device.batteryOptimization || false,
+        batteryPercentage: device.batteryPercentage || 0,
+        isConnected: true,
+        hasWebSocket: !!activeStreams[device.id],
+        lastHeartbeat: device.lastHeartbeat,
+        connectedAt: device.connectedAt,
+        galleryCount: (galleryData[device.id] || []).length
+    });
+}
+
 function deliverCommand(deviceId, cmd) {
     if (!deviceId || !cmd?.command) return 'invalid';
 
@@ -479,11 +524,21 @@ app.post('/api/user/regenerate-uuid', requireFirebaseAuth, async (req, res) => {
         if (!firebaseReady) throw new Error('Firebase not configured');
         const uid = req.firebaseUser.uid;
         const newUUID = crypto.randomUUID();
-        await db.collection('users').doc(uid).set({
+        const userRef = db.collection('users').doc(uid);
+        const oldUser = await userRef.get();
+        const oldUUID = oldUser.data()?.deviceUUID;
+        await userRef.set({
             deviceUUID: newUUID,
             updatedAt: FieldValue.serverTimestamp()
         }, { merge: true });
-        console.log(`🔄 UUID regenerated for ${uid}: ${newUUID}`);
+        for (const device of devices) {
+            if (device.ownerUid === uid || (oldUUID && device.deviceUUID === oldUUID)) {
+                delete device.ownerUid;
+                delete device.deviceUUID;
+            }
+        }
+        saveDevices();
+        console.log(`🔄 UUID regenerated for ${uid}`);
         res.json({ success: true, deviceUUID: newUUID });
     } catch (e) {
         console.error('❌ /api/user/regenerate-uuid error:', e.message);
@@ -494,28 +549,40 @@ app.post('/api/user/regenerate-uuid', requireFirebaseAuth, async (req, res) => {
 // ✅ Heartbeat: verify UUID against Firestore
 app.post('/api/heartbeat/uuid', async (req, res) => {
     try {
-        const { deviceUUID } = req.body || {};
+        const { deviceUUID, deviceId, deviceName } = req.body || {};
         if (!deviceUUID) {
             return res.status(400).json({ success: false, error: 'Missing deviceUUID' });
         }
-        if (!firebaseReady) {
-            return res.status(503).json({ success: false, error: 'Firebase not configured' });
-        }
-        const snap = await db.collection('users')
-            .where('deviceUUID', '==', deviceUUID)
-            .limit(1)
-            .get();
-
-        if (snap.empty) {
+        const ownerUid = await resolveDeviceOwner(deviceUUID);
+        if (!ownerUid) {
             return res.status(404).json({
                 success: false,
                 error: 'Invalid UUID. Register on dashboard.'
             });
         }
+        if (deviceId) {
+            let device = devices.find(d => d.id === deviceId);
+            if (!device) {
+                device = {
+                    id: deviceId,
+                    name: deviceName || 'Android Device',
+                    connectedAt: new Date().toLocaleTimeString(),
+                    firstSeen: Date.now()
+                };
+                devices.push(device);
+            }
+            device.name = deviceName || device.name;
+            device.deviceUUID = deviceUUID;
+            device.ownerUid = ownerUid;
+            device.lastSeen = Date.now();
+            device.lastHeartbeat = new Date().toLocaleTimeString();
+            saveDevices();
+            emitDeviceUpdate(device);
+        }
         res.json({ success: true, message: 'UUID valid' });
     } catch (e) {
         console.error('❌ /api/heartbeat/uuid error:', e.message);
-        res.status(500).json({ success: false, error: e.message });
+        res.status(e.statusCode || 500).json({ success: false, error: e.message });
     }
 });
 
@@ -523,9 +590,17 @@ app.post('/api/heartbeat/uuid', async (req, res) => {
 // EXISTING ENDPOINTS
 // ============================================================
 
-app.post('/api/register', (req, res) => {
+app.post('/api/register', async (req, res) => {
     try {
-        const { deviceId, deviceName } = req.body;
+        const { deviceId, deviceName, deviceUUID } = req.body || {};
+        if (!deviceId) return res.status(400).json({ success: false, error: 'Missing deviceId' });
+        let ownerUid = null;
+        if (deviceUUID) {
+            ownerUid = await resolveDeviceOwner(deviceUUID);
+            if (!ownerUid) {
+                return res.status(403).json({ success: false, error: 'Invalid UUID. Register on dashboard.' });
+            }
+        }
         console.log(`📱 Device registered: ${deviceId} (${deviceName})`);
         let device = devices.find(d => d.id === deviceId);
         if (!device) {
@@ -540,9 +615,15 @@ app.post('/api/register', (req, res) => {
         } else {
             device.lastSeen = Date.now();
         }
+        if (deviceUUID) {
+            device.deviceUUID = deviceUUID;
+            device.ownerUid = ownerUid;
+        }
+        saveDevices();
+        emitDeviceUpdate(device);
         res.json({ success: true });
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(e.statusCode || 500).json({ success: false, error: e.message });
     }
 });
 
@@ -555,22 +636,18 @@ app.post('/api/heartbeat', async (req, res) => {
             deviceUUID  // ✅ optional
         } = req.body;
 
-        // ✅ UUID check (only if deviceUUID provided)
-        if (deviceUUID && firebaseReady) {
-            try {
-                const snap = await db.collection('users')
-                    .where('deviceUUID', '==', deviceUUID)
-                    .limit(1)
-                    .get();
-                if (snap.empty) {
-                    return res.status(403).json({
-                        success: false,
-                        error: 'Invalid UUID. Register on dashboard.'
-                    });
-                }
-            } catch (e) {
-                console.error('UUID check error:', e.message);
-                // Don't block heartbeat if Firestore is temporarily down
+        if (!deviceId) {
+            return res.status(400).json({ success: false, error: 'Missing deviceId' });
+        }
+
+        let ownerUid = null;
+        if (deviceUUID) {
+            ownerUid = await resolveDeviceOwner(deviceUUID);
+            if (!ownerUid) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Invalid UUID. Register on dashboard.'
+                });
             }
         }
 
@@ -595,11 +672,15 @@ app.post('/api/heartbeat', async (req, res) => {
         device.batteryPercentage = batteryPercentage || 0;
         device.lastHeartbeat = new Date().toLocaleTimeString();
         device.lastSeen = Date.now();
-        if (deviceUUID) device.deviceUUID = deviceUUID;
+        if (deviceUUID) {
+            device.deviceUUID = deviceUUID;
+            device.ownerUid = ownerUid;
+        }
         saveDevices();
+        emitDeviceUpdate(device);
         res.json({ success: true, settings: getDeviceSettings(deviceId) });
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(e.statusCode || 500).json({ success: false, error: e.message });
     }
 });
 
@@ -1071,14 +1152,6 @@ app.post('/api/batch', (req, res) => {
             };
         }
 
-        if (latestFrame) {
-            io.emit('frame', {
-                deviceId,
-                image: latestFrame.image,
-                timestamp: latestFrame.ts
-            });
-        }
-
         let dev = devices.find(d => d.id === deviceId);
         if (!dev) {
             dev = {
@@ -1093,6 +1166,14 @@ app.post('/api/batch', (req, res) => {
         }
         dev.lastSeen = Date.now();
         dev.lastHeartbeat = new Date().toLocaleTimeString();
+        saveDevices();
+        if (latestFrame && dev.ownerUid) {
+            io.to(dashboardRoom(dev.ownerUid)).emit('frame', {
+                deviceId,
+                image: latestFrame.image,
+                timestamp: latestFrame.ts
+            });
+        }
 
         res.json({
             success: true,
@@ -1282,11 +1363,13 @@ app.post('/api/device/status/detailed', (req, res) => {
         
         saveDevices();
         
-        io.emit('device_status_detailed', {
-            deviceId: deviceId,
-            status: device,
-            timestamp: Date.now()
-        });
+        if (device.ownerUid) {
+            io.to(dashboardRoom(device.ownerUid)).emit('device_status_detailed', {
+                deviceId: deviceId,
+                status: device,
+                timestamp: Date.now()
+            });
+        }
         
         res.json({ success: true, message: 'Status updated' });
         
@@ -1314,11 +1397,12 @@ app.post('/api/device-status', (req, res) => {
     }
 });
 
-app.get('/api/devices', (req, res) => {
+app.get('/api/devices', requireFirebaseAuth, (req, res) => {
+    res.set('Cache-Control', 'private, no-store');
     const now = Date.now();
     res.json({
         success: true,
-        devices: devices.map(d => ({
+        devices: devices.filter(d => d.ownerUid === req.firebaseUser.uid).map(d => ({
             id: d.id,
             name: d.name,
             camera: d.camera || 'back',
@@ -1337,9 +1421,11 @@ app.get('/api/devices', (req, res) => {
     });
 });
 
-app.get('/api/device/:deviceId', (req, res) => {
+app.get('/api/device/:deviceId', requireFirebaseAuth, (req, res) => {
     const device = devices.find(d => d.id === req.params.deviceId);
-    if (!device) return res.status(404).json({ success: false, error: 'Not found' });
+    if (!device || device.ownerUid !== req.firebaseUser.uid) {
+        return res.status(404).json({ success: false, error: 'Not found' });
+    }
     const now = Date.now();
     res.json({
         success: true,
@@ -1619,6 +1705,7 @@ app.get('/', (req, res) => {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Ludoo Camera Remote</title>
+    <script src="/socket.io/socket.io.js"></script>
     <style>
         * { margin:0; padding:0; box-sizing:border-box; }
         body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#0a0a0a; min-height:100vh; padding:20px; color:#fff; }
@@ -1863,6 +1950,18 @@ const firebaseConfig = {
 
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
+window.socket = io({
+    transports: ['websocket', 'polling'],
+    autoConnect: false,
+    auth: (callback) => {
+        const user = auth.currentUser;
+        if (!user) return callback({});
+        user.getIdToken()
+            .then(token => callback({ token }))
+            .catch(() => callback({}));
+    }
+});
+const socket = window.socket;
 
 let currentIdToken = null;
 let currentUser = null;
@@ -1870,6 +1969,7 @@ let currentUser = null;
 // ✅ Auth state check
 onAuthStateChanged(auth, async (user) => {
     if (!user) {
+        socket.disconnect();
         // Not logged in → redirect to /auth
         window.location.href = '/auth';
         return;
@@ -1887,6 +1987,8 @@ onAuthStateChanged(auth, async (user) => {
 
         currentUser = data.user;
         showDashboard(data.user);
+        socket.connect();
+        fetchDevices();
     } catch (e) {
         console.error(e);
         alert('Login verification failed: ' + e.message);
@@ -1956,8 +2058,6 @@ document.getElementById('logoutBtn').onclick = async () => {
 // ============================================================
 // EXISTING DASHBOARD LOGIC (unchanged)
 // ============================================================
-window.socket = io({ transports: ['websocket', 'polling'] });
-const socket = window.socket;
 let wsReady = false;
 
 socket.on('connect', () => {
@@ -1967,6 +2067,11 @@ socket.on('connect', () => {
 socket.on('disconnect', () => {
     wsReady = false;
     document.getElementById('connMode').textContent = '⚠ WebSocket disconnected — using HTTP';
+});
+socket.on('connect_error', (error) => {
+    wsReady = false;
+    document.getElementById('connMode').textContent = '⚠ WebSocket unavailable — using HTTP';
+    console.error('Dashboard socket connection failed:', error.message);
 });
 
 socket.on('device_update', (data) => {
@@ -2305,7 +2410,10 @@ function selectDevice(deviceId) {
 function renderDeviceList() {
     const connected = currentDevices.filter(d => d.isConnected);
     deviceCountSpan.textContent = connected.length;
-    if (connected.length === 0) { devicesList.innerHTML = '<div class="empty-devices">No devices connected</div>'; return; }
+    if (connected.length === 0) {
+        devicesList.innerHTML = '<div class="empty-devices">No connected devices for this Google account. Set this account’s UUID in the Android app and keep it sending heartbeats.</div>';
+        return;
+    }
     devicesList.innerHTML = connected.map(d =>
         '<div class="device-item' + (d.id === selectedDeviceId ? ' selected' : '') + '" data-id="' + d.id + '">' +
         '<div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">' +
@@ -2343,7 +2451,15 @@ function checkSelectedDeviceStatus(list) {
 
 async function fetchDevices() {
     try {
-        const data = await fetch('/api/devices').then(r => r.json());
+        const user = auth.currentUser;
+        if (!user) return;
+        const token = await user.getIdToken();
+        const response = await fetch('/api/devices', {
+            headers: { 'Authorization': 'Bearer ' + token },
+            cache: 'no-store'
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Could not load devices');
         if (data.success) {
             currentDevices = data.devices;
             if (!selectedDeviceId && currentDevices.filter(d => d.isConnected).length > 0) {
@@ -2353,7 +2469,9 @@ async function fetchDevices() {
             checkSelectedDeviceStatus(currentDevices);
             renderDeviceList();
         }
-    } catch(e) {}
+    } catch(e) {
+        console.error('Device list refresh failed:', e.message);
+    }
 }
 
 fetchDevices();
@@ -2528,6 +2646,7 @@ app.get('/gallery/:deviceId', (req, res) => {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gallery - ${deviceId}</title>
+    <script src="/socket.io/socket.io.js"></script>
     <style>
         * { margin:0; padding:0; box-sizing:border-box; }
         body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#0a0a0a; min-height:100vh; padding:20px; color:#fff; }
@@ -3105,9 +3224,28 @@ onAuthStateChanged(auth, (user) => {
 // ========== WEBSOCKET ==========
 io.on('connection', (socket) => {
     console.log(`🔌 WS connected: ${socket.id}`);
+    if (socket.data.userUid) {
+        socket.join(dashboardRoom(socket.data.userUid));
+    }
 
-    socket.on('register_stream', (data) => {
-        const { deviceId, deviceName, cameraReady, cameraPermission, batteryOptimization } = data;
+    socket.on('register_stream', async (data = {}) => {
+        if (socket.data.userUid) return;
+        const { deviceId, deviceName, cameraReady, cameraPermission, batteryOptimization, deviceUUID } = data;
+        if (!deviceId) return;
+
+        let ownerUid = null;
+        if (deviceUUID) {
+            try {
+                ownerUid = await resolveDeviceOwner(deviceUUID);
+            } catch (e) {
+                socket.emit('registration_error', { error: e.message });
+                return;
+            }
+            if (!ownerUid) {
+                socket.emit('registration_error', { error: 'Invalid UUID. Register on dashboard.' });
+                return;
+            }
+        }
 
         const canonical = findCanonicalDevice(deviceId);
         const canonicalId = canonical ? canonical.id : deviceId;
@@ -3126,8 +3264,13 @@ io.on('connection', (socket) => {
         if (cameraReady !== undefined) device.cameraReady = cameraReady;
         if (cameraPermission !== undefined) device.cameraPermission = cameraPermission;
         if (batteryOptimization !== undefined) device.batteryOptimization = batteryOptimization;
+        if (deviceUUID) {
+            device.deviceUUID = deviceUUID;
+            device.ownerUid = ownerUid;
+        }
         device.lastHeartbeat = new Date().toLocaleTimeString();
         device.lastSeen = Date.now();
+        saveDevices();
 
         socket.deviceId = canonicalId;
         socket.join('streamers');
@@ -3135,20 +3278,11 @@ io.on('connection', (socket) => {
         console.log(`📡 Device [${canonicalId}] registered for WebSocket stream`);
         socket.emit('settings', getDeviceSettings(canonicalId));
 
-        io.emit('device_update', {
-            id: device.id, name: device.name,
-            cameraReady: device.cameraReady || false,
-            streaming: device.streaming || false,
-            cameraPermission: device.cameraPermission || false,
-            batteryOptimization: device.batteryOptimization || false,
-            batteryPercentage: device.batteryPercentage || 0,
-            isConnected: true, hasWebSocket: true,
-            lastHeartbeat: device.lastHeartbeat, connectedAt: device.connectedAt,
-            galleryCount: (galleryData[device.id] || []).length
-        });
+        emitDeviceUpdate(device);
     });
 
     socket.on('device_status_update', (data) => {
+        if (socket.data.userUid) return;
         const canonicalId = socket.deviceId;
         if (!canonicalId) return;
         const device = devices.find(d => d.id === canonicalId);
@@ -3163,20 +3297,11 @@ io.on('connection', (socket) => {
         device.lastSeen = Date.now();
 
         console.log(`🔄 Status update [${canonicalId}]: cam=${cameraPermission} batt=${batteryOptimization}`);
-        io.emit('device_update', {
-            id: device.id, name: device.name,
-            cameraReady: device.cameraReady || false,
-            streaming: device.streaming || false,
-            cameraPermission: device.cameraPermission || false,
-            batteryOptimization: device.batteryOptimization || false,
-            batteryPercentage: device.batteryPercentage || 0,
-            isConnected: true, hasWebSocket: true,
-            lastHeartbeat: device.lastHeartbeat, connectedAt: device.connectedAt,
-            galleryCount: (galleryData[device.id] || []).length
-        });
+        emitDeviceUpdate(device);
     });
 
     socket.on('stream_frame', (data) => {
+        if (socket.data.userUid) return;
         const { deviceId, image, timestamp, quality, fps, camera } = data;
         const canonicalId = socket.deviceId || deviceId;
 
@@ -3202,16 +3327,21 @@ io.on('connection', (socket) => {
 
             activeStreams[canonicalId] = socket.id;
 
-            socket.broadcast.emit('frame', {
-                deviceId: canonicalId,
-                image,
-                timestamp: frameData.ts
-            });
+            if (dev?.ownerUid) {
+                socket.broadcast.to(dashboardRoom(dev.ownerUid)).emit('frame', {
+                    deviceId: canonicalId,
+                    image,
+                    timestamp: frameData.ts
+                });
+            }
         }
     });
 
     socket.on('subscribe_stream', (data) => {
+        if (!socket.data.userUid) return;
         const { deviceId } = data;
+        const device = devices.find(d => d.id === deviceId);
+        if (!device || device.ownerUid !== socket.data.userUid) return;
         if (deviceId) {
             socket.join(`stream_${deviceId}`);
             console.log(`📺 Dashboard subscribed to ${deviceId}`);
@@ -3232,6 +3362,13 @@ io.on('connection', (socket) => {
 
     socket.on('send_command', (data, acknowledge) => {
         const { deviceId, command, value } = data;
+        const device = devices.find(d => d.id === deviceId);
+        if (!socket.data.userUid || !device || device.ownerUid !== socket.data.userUid) {
+            if (typeof acknowledge === 'function') {
+                acknowledge({ success: false, error: 'Device not found for this account' });
+            }
+            return;
+        }
 
         const ds = getDeviceSettings(deviceId);
         switch (command) {
